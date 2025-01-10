@@ -1,6 +1,7 @@
 use std::process::{Command, Stdio};
 use std::io::{BufRead, BufReader};
 
+/// 打包 Java 项目
 pub fn build_java_project(project_dir: &str) -> Result<(), String> {
     let mut child = Command::new("cmd")
         .args(["/c", "mvn"])

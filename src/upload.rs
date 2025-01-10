@@ -4,10 +4,12 @@ use std::path::Path;
 use std::io::Write;
 use std::fs;
 
+/// 将字节转换为 MB
 fn bytes_to_mb(bytes: u64) -> f64 {
     bytes as f64 / (1024.0 * 1024.0)
 }
 
+/// 上传 JAR 包
 pub fn upload_jar(server: &str, username: &str, password: &str, local_path: &str, remote_path: &str) -> Result<(), String> {
     // 获取文件大小
     let file_size = fs::metadata(local_path)

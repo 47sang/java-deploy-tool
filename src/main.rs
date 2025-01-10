@@ -25,6 +25,31 @@ fn main() {
                 .default_value("."),
         )
         .arg(
+            Arg::new("config")
+                .short('c')
+                .long("config")
+                .value_name("CONFIG_FILE")
+                .help("配置文件路径")
+                .required(false)
+                .default_value("config/deploy.toml"),
+        )
+        .arg(
+            Arg::new("env")
+                .short('e')
+                .long("env")
+                .value_name("ENVIRONMENT")
+                .help("部署环境 (dev/test/prod)")
+                .required(false)
+                .default_value("dev"),
+        )
+        .arg(
+            Arg::new("init-config")
+                .long("init-config")
+                .help("创建示例配置文件")
+                .action(clap::ArgAction::SetTrue),
+        )
+        // 保留原有的参数，用于命令行覆盖配置文件的值
+        .arg(
             Arg::new("server")
                 .short('s')
                 .long("server")
@@ -66,11 +91,37 @@ fn main() {
         )
         .get_matches();
 
+    let config_path = matches.get_one::<String>("config").unwrap();
+    
+    // 如果指定了init-config参数，创建示例配置文件并退出
+    if matches.get_flag("init-config") {
+        match DeployConfig::create_example_config(config_path) {
+            Ok(_) => {
+                println!("示例配置文件已创建: {}", config_path);
+                println!("请修改配置文件中的值后再运行部署。");
+                return;
+            }
+            Err(e) => {
+                eprintln!("创建配置文件失败: {}", e);
+                return;
+            }
+        }
+    }
+
     let project_dir = matches.get_one::<String>("project_dir").unwrap();
+    let environment = matches.get_one::<String>("env").unwrap();
     
-    // 创建配置
-    let mut config = DeployConfig::default();
+    // 从配置文件加载环境配置
+    let mut config = match DeployConfig::from_file(config_path, environment) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("加载配置失败: {}", e);
+            eprintln!("提示: 使用 --init-config 参数可以创建示例配置文件");
+            return;
+        }
+    };
     
+    // 命令行参数覆盖配置文件的值
     if let Some(server) = matches.get_one::<String>("server") {
         config.server = server.clone();
     }
@@ -105,6 +156,7 @@ fn main() {
     for jar_name in deployments {
         let config = config.clone();
         let project_dir = project_dir.clone();
+        let environment = environment.clone();
         let handle = thread::spawn(move || {
             let jar_path = format!("{}/{}/target/{}", project_dir, jar_name.split(".").next().unwrap(), jar_name);
             let remote_path = format!("{}/{}", config.remote_base_path, jar_name);
@@ -117,7 +169,7 @@ fn main() {
             println!("上传成功: {}", jar_name);
 
             // 运行 JAR 包
-            if let Err(e) = run_jar(&config.server, &config.username, &config.password, &remote_path, &config.java_path) {
+            if let Err(e) = run_jar(&config.server, &config.username, &config.password, &remote_path, &config.java_path, &environment) {
                 eprintln!("运行失败 {}: {}", jar_name, e);
                 return;
             }

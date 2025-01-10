@@ -4,7 +4,7 @@ use std::net::TcpStream;
 use std::time::Duration;
 
 /// 运行 JAR 包
-pub fn run_jar(server: &str, username: &str, password: &str, jar_path: &str, java_path: &str) -> Result<(), String> {
+pub fn run_jar(server: &str, username: &str, password: &str, jar_path: &str, java_path: &str, env: &str) -> Result<(), String> {
     let tcp = TcpStream::connect(server).map_err(|e| format!("Failed to connect: {}", e))?;
     let mut sess = Session::new().map_err(|e| format!("Failed to create session: {}", e))?;
     sess.set_tcp_stream(tcp);
@@ -37,7 +37,7 @@ pub fn run_jar(server: &str, username: &str, password: &str, jar_path: &str, jav
         .map_err(|e| format!("Failed to open channel: {}", e))?;
 
     channel
-        .exec(&format!("nohup {} -jar {} > /dev/null 2>&1 &", java_path, jar_path))
+        .exec(&format!("nohup {} -jar {} --spring.profiles.active={} > /dev/null 2>&1 &", java_path, jar_path, env))
         .map_err(|e| format!("执行运行jar命令失败: {}", e))?;
 
     // 等待一小段时间确保进程已启动

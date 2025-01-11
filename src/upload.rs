@@ -18,12 +18,12 @@ pub fn upload_jar(server: &str, username: &str, password: &str, local_path: &str
 
     println!("开始上传文件: {} (大小: {:.2} MB)", local_path, bytes_to_mb(file_size));
 
-    let tcp = TcpStream::connect(server).map_err(|e| format!("连接失败: {}", e))?;
-    let mut sess = Session::new().map_err(|e| format!("创建会话失败: {}", e))?;
+    let tcp = TcpStream::connect(server).map_err(|e| format!("ssh通信连接失败: {}", e))?;
+    let mut sess = Session::new().map_err(|e| format!("创建ssh会话失败: {}", e))?;
     sess.set_tcp_stream(tcp);
-    sess.handshake().map_err(|e| format!("握手失败: {}", e))?;
+    sess.handshake().map_err(|e| format!("ssh通信握手失败: {}", e))?;
     sess.userauth_password(username, password)
-        .map_err(|e| format!("认证失败: {}", e))?;
+        .map_err(|e| format!("ssh通信认证失败,可能密码错误: {}", e))?;
 
     let data = fs::read(local_path).map_err(|e| format!("读取本地文件失败: {}", e))?;
     if data.len() as u64 != file_size {

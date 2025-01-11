@@ -13,14 +13,14 @@ use upload::upload_jar;
 fn main() {
     let matches = Command::new("java-deploy-tool")
         .version("1.0")
-        .author("Your Name <your.email@example.com>")
-        .about("Deploys Java projects")
+        .author("士钰 <zhoushiyu92@gmail.com>")
+        .about("一键部署Java项目,支持多环境部署,支持多模块部署")
         .arg(
             Arg::new("project_dir")
                 .short('p')
                 .long("project-dir")
                 .value_name("DIR")
-                .help("Sets the Java project directory")
+                .help("设置java项目目录,默认当前目录")
                 .required(false)
                 .default_value("."),
         )
@@ -29,9 +29,9 @@ fn main() {
                 .short('c')
                 .long("config")
                 .value_name("CONFIG_FILE")
-                .help("配置文件路径")
+                .help("配置文件路径,默认./deploy.toml")
                 .required(false)
-                .default_value("config/deploy.toml"),
+                .default_value("./deploy.toml"),
         )
         .arg(
             Arg::new("env")
@@ -55,7 +55,7 @@ fn main() {
                 .short('s')
                 .long("server")
                 .value_name("HOST")
-                .help("Sets the server address")
+                .help("设置服务器地址")
                 .required(false),
         )
         .arg(
@@ -63,7 +63,7 @@ fn main() {
                 .short('u')
                 .long("username")
                 .value_name("USERNAME")
-                .help("Sets the server username")
+                .help("设置服务器用户名")
                 .required(false),
         )
         .arg(
@@ -71,7 +71,7 @@ fn main() {
                 .short('w')
                 .long("password")
                 .value_name("PASSWORD")
-                .help("Sets the server password")
+                .help("设置服务器密码")
                 .required(false),
         )
         .arg(
@@ -79,7 +79,7 @@ fn main() {
                 .short('j')
                 .long("java-path")
                 .value_name("JAVA_PATH")
-                .help("Sets the Java executable path")
+                .help("设置java可执行文件路径")
                 .required(false),
         )
         .arg(
@@ -87,13 +87,13 @@ fn main() {
                 .short('r')
                 .long("remote-base-path")
                 .value_name("REMOTE_PATH")
-                .help("Sets the remote base path for deployment")
+                .help("设置远程部署基础路径")
                 .required(false),
         )
         .get_matches();
 
     let config_path = matches.get_one::<String>("config").unwrap();
-    
+
     // 如果指定了init-config参数，创建示例配置文件并退出
     if matches.get_flag("init-config") {
         match DeployConfig::create_example_config(config_path) {
@@ -109,26 +109,27 @@ fn main() {
         }
     }
 
-    let project_dir = matches.get_one::<String>("project_dir").unwrap().to_string();
-    let environments: Vec<String> = matches.get_many::<String>("env")
+    let project_dir = matches
+        .get_one::<String>("project_dir")
+        .unwrap()
+        .to_string();
+    let environments: Vec<String> = matches
+        .get_many::<String>("env")
         .unwrap()
         .map(|s| s.to_string())
         .collect();
-    
+
     // 从命令行获取可能的覆盖值
     let server = matches.get_one::<String>("server").map(|s| s.to_string());
     let username = matches.get_one::<String>("username").map(|s| s.to_string());
     let password = matches.get_one::<String>("password").map(|s| s.to_string());
-    let java_path = matches.get_one::<String>("java_path").map(|s| s.to_string());
-    let remote_base_path = matches.get_one::<String>("remote_base_path").map(|s| s.to_string());
+    let java_path = matches
+        .get_one::<String>("java_path")
+        .map(|s| s.to_string());
+    let remote_base_path = matches
+        .get_one::<String>("remote_base_path")
+        .map(|s| s.to_string());
     let config_path = config_path.to_string();
-
-    // 定义所有需要部署的 JAR 包
-    let deployments = vec![
-        "admin.jar",
-        "client.jar",
-        "websocket.jar",
-    ];
 
     // 构建Java项目
     if let Err(e) = build_java_project(&project_dir) {
@@ -139,16 +140,15 @@ fn main() {
     // 为每个环境创建部署任务
     let mut handles = vec![];
 
-    for jar_name in &deployments {
-        for env in &environments {
-            let config = match DeployConfig::from_file(&config_path, &env) {
-                Ok(config) => config,
-                Err(e) => {
-                    eprintln!("加载{}环境配置失败: {}", env, e);
-                    continue;
-                }
-            };
-            
+    for env in &environments {
+        let config = match DeployConfig::from_file(&config_path, &env) {
+            Ok(config) => config,
+            Err(e) => {
+                eprintln!("加载{}环境配置失败: {}", env, e);
+                continue;
+            }
+        };
+        for jar_name in &config.jar_files {
             // 应用命令行参数覆盖
             let mut config = config.clone();
             if let Some(server) = &server {
@@ -170,22 +170,45 @@ fn main() {
             let jar_name = jar_name.to_string();
             let project_dir = project_dir.clone();
             let env = env.clone();
-            
+
+            let jar_path = if config.jar_files.len() == 1 {
+                format!("{}/target/{}", project_dir, jar_name)
+            } else {
+                format!(
+                    "{}/{}/target/{}",
+                    project_dir,
+                    jar_name.split(".").next().unwrap(),
+                    jar_name
+                )
+            };
+
             let handle = thread::spawn(move || {
-                let jar_path = format!("{}/{}/target/{}", project_dir, jar_name.split(".").next().unwrap(), jar_name);
                 let remote_path = format!("{}/{}", config.remote_base_path, jar_name);
 
                 println!("开始部署 {} 到 {} 环境", jar_name, env);
-                
+
                 // 上传 JAR 包
-                if let Err(e) = upload_jar(&config.server, &config.username, &config.password, &jar_path, &remote_path) {
+                if let Err(e) = upload_jar(
+                    &config.server,
+                    &config.username,
+                    &config.password,
+                    &jar_path,
+                    &remote_path,
+                ) {
                     eprintln!("上传失败 {} ({}环境): {}", jar_name, env, e);
                     return;
                 }
                 println!("上传成功: {} ({}环境)", jar_name, env);
 
                 // 运行 JAR 包
-                if let Err(e) = run_jar(&config.server, &config.username, &config.password, &remote_path, &config.java_path, &env) {
+                if let Err(e) = run_jar(
+                    &config.server,
+                    &config.username,
+                    &config.password,
+                    &remote_path,
+                    &config.java_path,
+                    &env,
+                ) {
                     eprintln!("运行失败 {} ({}环境): {}", jar_name, env, e);
                     return;
                 }

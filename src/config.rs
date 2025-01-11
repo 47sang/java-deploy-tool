@@ -10,6 +10,7 @@ pub struct DeployConfig {
     pub password: String,
     pub java_path: String,
     pub remote_base_path: String,
+    pub jar_files: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -28,6 +29,7 @@ impl DeployConfig {
                 password: "lykj".to_string(),
                 java_path: "/opt/soft/zulu11/bin/java".to_string(),
                 remote_base_path: "/opt/xinxuan1v1".to_string(),
+                jar_files: vec!["admin.jar", "client.jar", "websocket.jar"].iter().map(|s| s.to_string()).collect(),
             },
         );
         environments.insert(
@@ -38,6 +40,7 @@ impl DeployConfig {
                 password: "test-password".to_string(),
                 java_path: "/usr/bin/java".to_string(),
                 remote_base_path: "/opt/test/apps".to_string(),
+                jar_files: vec!["admin.jar", "client.jar", "websocket.jar"].iter().map(|s| s.to_string()).collect(),
             },
         );
         environments.insert(
@@ -48,6 +51,7 @@ impl DeployConfig {
                 password: "prod-password".to_string(),
                 java_path: "/usr/java/latest/bin/java".to_string(),
                 remote_base_path: "/opt/prod/apps".to_string(),
+                jar_files: vec!["admin.jar", "client.jar", "websocket.jar"].iter().map(|s| s.to_string()).collect(),
             },
         );
 

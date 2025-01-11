@@ -5,17 +5,17 @@ use std::time::Duration;
 
 /// 运行 JAR 包
 pub fn run_jar(server: &str, username: &str, password: &str, jar_path: &str, java_path: &str, env: &str) -> Result<(), String> {
-    let tcp = TcpStream::connect(server).map_err(|e| format!("Failed to connect: {}", e))?;
-    let mut sess = Session::new().map_err(|e| format!("Failed to create session: {}", e))?;
+    let tcp = TcpStream::connect(server).map_err(|e| format!("ssh通信连接失败: {}", e))?;
+    let mut sess = Session::new().map_err(|e| format!("创建ssh会话失败: {}", e))?;
     sess.set_tcp_stream(tcp);
     sess.handshake()
-        .map_err(|e| format!("Handshake failed: {}", e))?;
+        .map_err(|e| format!("ssh通信握手失败: {}", e))?;
     sess.userauth_password(username, password)
-        .map_err(|e| format!("Authentication failed: {}", e))?;
+        .map_err(|e| format!("认证失败,可能密码错误: {}", e))?;
 
     let mut channel = sess
         .channel_session()
-        .map_err(|e| format!("Failed to open channel: {}", e))?;
+        .map_err(|e| format!("打开通道失败: {}", e))?;
 
     // 杀死进程
     channel
@@ -29,12 +29,12 @@ pub fn run_jar(server: &str, username: &str, password: &str, jar_path: &str, jav
     channel
         .read_to_string(&mut output)
         .map_err(|e| format!("读取输出失败: {}", e))?;
-    println!("Kill command output: {}", output);
+    println!("杀死进程命令输出: {}", output);
 
     // 创建新的channel运行jar
     let mut channel = sess
         .channel_session()
-        .map_err(|e| format!("Failed to open channel: {}", e))?;
+        .map_err(|e| format!("打开通道失败: {}", e))?;
 
     channel
         .exec(&format!("nohup {} -jar {} --spring.profiles.active={} > /dev/null 2>&1 &", java_path, jar_path, env))
@@ -46,7 +46,7 @@ pub fn run_jar(server: &str, username: &str, password: &str, jar_path: &str, jav
     // 检查进程是否成功启动
     let mut check_channel = sess
         .channel_session()
-        .map_err(|e| format!("Failed to open channel: {}", e))?;
+        .map_err(|e| format!("打开通道失败: {}", e))?;
 
     check_channel
         .exec(&format!("ps -ef | grep {} | grep -v grep", jar_path))

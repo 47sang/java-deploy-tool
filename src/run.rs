@@ -52,7 +52,7 @@ pub fn run_jar(server: &str, username: &str, password: &str, jar_path: &str, jav
         .map_err(|e| format!("打开通道失败: {}", e))?;
 
     check_channel
-        .exec(&format!("ps -ef | grep {} | grep -v grep", jar_path))
+        .exec(&format!("ps -ef | grep {} | grep -v grep | awk '{{print $2}}'", jar_path))
         .map_err(|e| format!("检查进程状态失败: {}", e))?;
 
     let mut output = String::new();
@@ -64,6 +64,6 @@ pub fn run_jar(server: &str, username: &str, password: &str, jar_path: &str, jav
         return Err(format!("程序启动失败: {}", jar_path));
     }
 
-    println!("程序已在后台成功启动: {}", jar_path);
+    println!("程序已在后台成功启动: {},进程id {}", jar_path, output.trim());
     Ok(())
 }

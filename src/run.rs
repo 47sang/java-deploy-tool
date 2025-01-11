@@ -29,7 +29,10 @@ pub fn run_jar(server: &str, username: &str, password: &str, jar_path: &str, jav
     channel
         .read_to_string(&mut output)
         .map_err(|e| format!("读取输出失败: {}", e))?;
-    println!("杀死进程命令输出: {}", output);
+      
+    if !output.trim().is_empty() {
+        println!("杀死进程命令输出: {}", output);
+    }
 
     // 创建新的channel运行jar
     let mut channel = sess

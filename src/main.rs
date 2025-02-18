@@ -244,5 +244,7 @@ where
         elapsed.as_secs() % 60
     );
     println!("本次部署执行时间: {}", formatted_time);
+    let now = chrono::Local::now();
+    println!("当前系统时间: {}", now.format("%Y-%m-%d %H:%M:%S"));
     elapsed // 返回执行时间
 }

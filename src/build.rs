@@ -3,6 +3,7 @@ use std::io::{BufRead, BufReader};
 
 /// 打包 Java 项目
 pub fn build_java_project(project_dir: &str) -> Result<(), String> {
+    // 尝试执行mvn命令，如果命令不存在会在spawn时返回错误
     let mut child = Command::new("cmd")
         .args(["/c", "mvn"])
         .arg("clean")
@@ -11,7 +12,7 @@ pub fn build_java_project(project_dir: &str) -> Result<(), String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("命令执行失败: mvn package: {}", e))?;
+        .map_err(|e| format!("执行mvn命令失败: {}", e))?;
 
     // 读取并显示标准输出
     if let Some(stdout) = child.stdout.take() {
@@ -37,8 +38,8 @@ pub fn build_java_project(project_dir: &str) -> Result<(), String> {
             let error = reader.lines()
                 .filter_map(|line| line.ok())
                 .collect::<Vec<String>>()
-                .join("\n");
-            Err(format!("构建失败:\n{}", error))
+                .join("\n");            
+            Err(format!("构建失败:请检查mvn是否配置在环境变量中\n{}", error))
         } else {
             Err("构建失败，无法获取错误信息".to_string())
         }

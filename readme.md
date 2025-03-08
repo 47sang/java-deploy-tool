@@ -1,18 +1,21 @@
 # 项目部署脚本
 
-- 将编译后的程序放到springboot项目目录下，再执行命令,会从当前项目目录下读取配置文件，并根据配置文件中的环境变量，将对应的jar包上传到远程服务器，并运行jar包
+- 支持将编译后的程序放到springboot项目目录下，再执行命令,会从当前项目目录下读取配置文件，并根据配置文件中的环境变量，将对应的jar包上传到远程服务器，并运行jar包
+
+- 支持将vue项目编译打包压缩zip发送到服务器,并自动解压部署
 
 ## 编译
 
 ```bash
-cargo run --release
+cargo build --release
 ```
 ## 创建配置文件
 
 ```bash
-java-deploy-tool --init-config
+deploy-tool --init-config
 ```
 
+- 配置环境说明
 ```toml
 [environments.test]
 # 远程服务器地址和端口
@@ -31,22 +34,21 @@ jar_files = [
     "client.jar",
     "websocket.jar",
 ]
+# npm run 后面跟随的后缀命令
+scripts = "prod:test"
+# 这个编译产物的输出文件夹名称
+output_dir = "dist-test"
 ```
 
 
 然后配置系统中mvn到系统path路径,不然找不到mvn命令
 
-# 开发环境（默认）
+# vue项目多环境部署
 ```bash
-java-deploy-tool
+deploy-tool -v dev,prod
 ```
 
-# 多环境
+# springboot项目多环境部署
 ```bash
-java-deploy-tool -e dev,prod
-```
-
-# 生产环境
-```bash
-java-deploy-tool -e prod
+deploy-tool -e dev,prod
 ```

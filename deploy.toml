@@ -1,0 +1,41 @@
+[environments.test]
+server = "test-server:22"
+username = "test-user"
+password = "test-password"
+java_path = "/usr/bin/java"
+remote_base_path = "/opt/test/apps"
+jar_files = [
+    "admin.jar",
+    "client.jar",
+    "websocket.jar",
+]
+scripts = "prod:test"
+output_dir = "dist-test"
+
+[environments.prod]
+server = "prod-server:22"
+username = "prod-user"
+password = "prod-password"
+java_path = "/usr/java/latest/bin/java"
+remote_base_path = "/opt/prod/apps"
+jar_files = [
+    "admin.jar",
+    "client.jar",
+    "websocket.jar",
+]
+scripts = "prod"
+output_dir = "dist"
+
+[environments.dev]
+server = "192.168.31.60:22"
+username = "root"
+password = "lykj"
+java_path = "/opt/soft/zulu11/bin/java"
+remote_base_path = "/opt/xinxuan1v1"
+jar_files = [
+    "admin.jar",
+    "client.jar",
+    "websocket.jar",
+]
+scripts = "prod:test"
+output_dir = "dist-test"

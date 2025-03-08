@@ -5,12 +5,22 @@ use std::path::Path;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DeployConfig {
+    /// 服务器地址
     pub server: String,
+    /// 用户名
     pub username: String,
+    /// 密码
     pub password: String,
+    /// java路径
     pub java_path: String,
+    /// 远程基础路径
     pub remote_base_path: String,
+    /// jar文件
     pub jar_files: Vec<String>,
+    /// vue打包执行命令脚本
+    pub scripts: String,
+    /// vue编译产物输出目录
+    pub output_dir: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -30,6 +40,8 @@ impl DeployConfig {
                 java_path: "/opt/soft/zulu11/bin/java".to_string(),
                 remote_base_path: "/opt/xinxuan1v1".to_string(),
                 jar_files: vec!["admin.jar", "client.jar", "websocket.jar"].iter().map(|s| s.to_string()).collect(),
+                scripts: "prod:test".to_string(),
+                output_dir: "dist-test".to_string(),
             },
         );
         environments.insert(
@@ -41,6 +53,8 @@ impl DeployConfig {
                 java_path: "/usr/bin/java".to_string(),
                 remote_base_path: "/opt/test/apps".to_string(),
                 jar_files: vec!["admin.jar", "client.jar", "websocket.jar"].iter().map(|s| s.to_string()).collect(),
+                scripts: "prod:test".to_string(),
+                output_dir: "dist-test".to_string(),
             },
         );
         environments.insert(
@@ -52,6 +66,8 @@ impl DeployConfig {
                 java_path: "/usr/java/latest/bin/java".to_string(),
                 remote_base_path: "/opt/prod/apps".to_string(),
                 jar_files: vec!["admin.jar", "client.jar", "websocket.jar"].iter().map(|s| s.to_string()).collect(),
+                scripts: "prod".to_string(),
+                output_dir: "dist".to_string(),
             },
         );
 

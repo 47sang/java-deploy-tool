@@ -19,7 +19,7 @@ pub struct Environments {
 }
 
 impl DeployConfig {
-    pub fn create_example_config(path: &str) -> Result<(), String> {
+    pub fn create_springboot_config(path: &str) -> Result<(), String> {
         let mut environments = HashMap::new();
         environments.insert(
             "dev".to_string(),

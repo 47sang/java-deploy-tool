@@ -15,25 +15,7 @@ fn main() {
     let matches = Command::new("java-deploy-tool")
         .version("1.0")
         .author("士钰 <zhoushiyu92@gmail.com>")
-        .about("一键部署Java项目,支持多环境部署,支持多模块部署")
-        .arg(
-            Arg::new("project_dir")
-                .short('p')
-                .long("project-dir")
-                .value_name("DIR")
-                .help("设置java项目目录,默认当前目录")
-                .required(false)
-                .default_value("."),
-        )
-        .arg(
-            Arg::new("config")
-                .short('c')
-                .long("config")
-                .value_name("CONFIG_FILE")
-                .help("配置文件路径,默认./deploy.toml")
-                .required(false)
-                .default_value("./deploy.toml"),
-        )
+        .about("一键部署Java项目,支持多环境部署,支持多模块部署")        
         .arg(
             Arg::new("env")
                 .short('e')
@@ -50,57 +32,17 @@ fn main() {
                 .help("创建示例配置文件")
                 .action(clap::ArgAction::SetTrue),
         )
-        // 保留原有的参数，用于命令行覆盖配置文件的值
-        .arg(
-            Arg::new("server")
-                .short('s')
-                .long("server")
-                .value_name("HOST")
-                .help("设置服务器地址")
-                .required(false),
-        )
-        .arg(
-            Arg::new("username")
-                .short('u')
-                .long("username")
-                .value_name("USERNAME")
-                .help("设置服务器用户名")
-                .required(false),
-        )
-        .arg(
-            Arg::new("password")
-                .short('w')
-                .long("password")
-                .value_name("PASSWORD")
-                .help("设置服务器密码")
-                .required(false),
-        )
-        .arg(
-            Arg::new("java_path")
-                .short('j')
-                .long("java-path")
-                .value_name("JAVA_PATH")
-                .help("设置java可执行文件路径")
-                .required(false),
-        )
-        .arg(
-            Arg::new("remote_base_path")
-                .short('r')
-                .long("remote-base-path")
-                .value_name("REMOTE_PATH")
-                .help("设置远程部署基础路径")
-                .required(false),
-        )
+        // 这里已移除命令行覆盖配置文件的参数
         .get_matches();
 
     // 调用方法并测量执行时间
     measure_execution_time(|| {
         println!("开始执行脚本程序");
-        let config_path = matches.get_one::<String>("config").unwrap();
+        let config_path = "./deploy.toml".to_string();
 
         // 如果指定了init-config参数，创建示例配置文件并退出
         if matches.get_flag("init-config") {
-            match DeployConfig::create_example_config(config_path) {
+            match DeployConfig::create_springboot_config(&config_path) {
                 Ok(_) => {
                     println!("示例配置文件已创建: {}", config_path);
                     println!("请修改配置文件中的值后再运行部署。");
@@ -113,10 +55,7 @@ fn main() {
             }
         }
 
-        let project_dir = matches
-            .get_one::<String>("project_dir")
-            .unwrap()
-            .to_string();
+        let project_dir = ".".to_string();
         let environments: Vec<String> = matches
             .get_many::<String>("env")
             .unwrap()
@@ -124,15 +63,6 @@ fn main() {
             .collect();
 
         // 从命令行获取可能的覆盖值
-        let server = matches.get_one::<String>("server").map(|s| s.to_string());
-        let username = matches.get_one::<String>("username").map(|s| s.to_string());
-        let password = matches.get_one::<String>("password").map(|s| s.to_string());
-        let java_path = matches
-            .get_one::<String>("java_path")
-            .map(|s| s.to_string());
-        let remote_base_path = matches
-            .get_one::<String>("remote_base_path")
-            .map(|s| s.to_string());
         let config_path = config_path.to_string();
 
         // 构建Java项目
@@ -154,27 +84,12 @@ fn main() {
             };
             for jar_name in &config.jar_files {
                 // 应用命令行参数覆盖
-                let mut config = config.clone();
-                if let Some(server) = &server {
-                    config.server = server.clone();
-                }
-                if let Some(username) = &username {
-                    config.username = username.clone();
-                }
-                if let Some(password) = &password {
-                    config.password = password.clone();
-                }
-                if let Some(java_path) = &java_path {
-                    config.java_path = java_path.clone();
-                }
-                if let Some(remote_base_path) = &remote_base_path {
-                    config.remote_base_path = remote_base_path.clone();
-                }
+                let config = config.clone();
 
                 let jar_name = jar_name.to_string();
                 let project_dir = project_dir.clone();
                 let env = env.clone();
-
+                // 获取编译产物文件名称,组装上传路径
                 let jar_path = if config.jar_files.len() == 1 {
                     format!("{}/target/{}", project_dir, jar_name)
                 } else {

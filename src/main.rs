@@ -3,17 +3,16 @@ mod config;
 mod run;
 mod upload;
 
-use build::{build_java_project, build_vue_project};
+use build::{build_java_project, build_vue_project, zip_dir};
 use clap::{Arg, Command};
 use config::DeployConfig;
 use run::run_jar;
 use std::fs::File;
-use std::io::prelude::*;
-use std::path::Path;
+
 use std::thread;
 use std::time::{Duration, Instant};
 use upload::{upload_file, upload_jar};
-use walkdir::WalkDir;
+
 use zip::CompressionMethod;
 use zip::{write::FileOptions, ZipWriter};
 
@@ -277,58 +276,9 @@ fn deploy_vue_project(
         });
         handles.push(handle);
     }
-        // 等待所有线程完成
+    // 等待所有线程完成
     for handle in handles {
         handle.join().unwrap();
     }
-    Ok(())
-}
-
-// 将目录打包成zip文件
-fn zip_dir(zip: &mut ZipWriter<File>, src_dir: &str, options: FileOptions) -> Result<(), String> {
-    let src_path = Path::new(src_dir);
-    
-    // 确保源目录存在
-    if !src_path.exists() || !src_path.is_dir() {
-        return Err(format!("源目录不存在或不是一个目录: {}", src_dir));
-    }
-    
-    let walkdir = WalkDir::new(src_dir);
-    
-    for entry in walkdir.into_iter().filter_map(Result::ok) {
-        let path = entry.path();
-        
-        // 跳过源目录本身
-        if path == src_path {
-            continue;
-        }
-        
-        // 计算相对路径
-        let rel_path = path.strip_prefix(src_path).map_err(|e| e.to_string())?;
-        
-        // 直接使用相对路径，不添加顶级目录
-        let zip_path_str = rel_path.to_str().ok_or("路径转换失败")?;
-        
-        // 替换Windows路径分隔符为ZIP标准的/
-        let zip_path_str = zip_path_str.replace('\\', "/");
-        
-        if path.is_file() {
-            zip.start_file(&zip_path_str, options).map_err(|e| e.to_string())?;
-            let mut f = File::open(path).map_err(|e| e.to_string())?;
-            let mut buffer = Vec::new();
-            f.read_to_end(&mut buffer).map_err(|e| e.to_string())?;
-            zip.write_all(&buffer).map_err(|e| e.to_string())?;
-        } else if path.is_dir() {
-            // 确保目录路径以/结尾
-            let dir_path = if zip_path_str.ends_with('/') { 
-                zip_path_str 
-            } else { 
-                format!("{}/", zip_path_str) 
-            };
-            
-            zip.add_directory(&dir_path, options).map_err(|e| e.to_string())?;
-        }
-    }
-    
     Ok(())
 }

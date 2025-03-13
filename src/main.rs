@@ -1,17 +1,15 @@
 mod build;
 mod config;
-mod run;
 mod upload;
 
 use build::{build_java_project, build_vue_project, zip_dir};
 use clap::{Arg, Command};
 use config::DeployConfig;
-use run::run_jar;
 use std::fs::File;
 
 use std::thread;
 use std::time::{Duration, Instant};
-use upload::{upload_file, upload_jar};
+use upload::{upload_file, upload_and_run_jar};
 
 use zip::CompressionMethod;
 use zip::{write::FileOptions, ZipWriter};
@@ -165,32 +163,20 @@ fn deploy_java_project(
 
                 println!("开始部署 {} 到 {} 环境", jar_name, env);
 
-                // 上传 JAR 包
-                if let Err(e) = upload_jar(
+                // 上传并运行 JAR 包
+                if let Err(e) = upload_and_run_jar(
                     &config.server,
                     &config.username,
                     &config.password,
                     &jar_path,
                     &remote_path,
-                ) {
-                    eprintln!("上传失败 {} ({}环境): {}", jar_name, env, e);
-                    return;
-                }
-                println!("上传成功: {} ({}环境)", jar_name, env);
-
-                // 运行 JAR 包
-                if let Err(e) = run_jar(
-                    &config.server,
-                    &config.username,
-                    &config.password,
-                    &remote_path,
                     &config.java_path,
                     &env,
                 ) {
-                    eprintln!("运行失败 {} ({}环境): {}", jar_name, env, e);
+                    eprintln!("部署失败 {} ({}环境): {}", jar_name, env, e);
                     return;
                 }
-                println!("运行成功: {} ({}环境)", jar_name, env);
+                println!("部署成功: {} ({}环境)", jar_name, env);
             });
             handles.push(handle);
         }

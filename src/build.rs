@@ -65,7 +65,7 @@ pub fn build_vue_project(project_dir: &str,scripts: &str) -> Result<(), String> 
         .map_err(|e| format!("等待命令完成失败: {}", e))?;
 
     if status.success() {
-        println!("Vue 项目构建成功!");
+        println!("{}环境下的Vue项目构建成功!",scripts);
         Ok(())
     } else {
         // 读取错误输出

@@ -36,6 +36,14 @@ fn main() {
                 .help("部署web端环境，多个环境用逗号分隔 (例如: dev,prod)")
                 .value_delimiter(',')
                 .required(false),
+        ).arg(
+            Arg::new("model")
+                .short('m')
+                .long("model")
+                .value_name("MODEL")
+                .help("部署jar模块，多个模块用逗号分隔 (例如: admin,client,websocket)")
+                .value_delimiter(',')
+                .required(false),
         )
         .arg(
             Arg::new("init-config")
@@ -90,21 +98,28 @@ fn main() {
             .map(|s| s.to_string())
             .collect();
 
-        println!("project_dir: {}", project_dir);
-        println!("environments: {:?}", environments);
-        println!("vue_environments: {:?}", vue_environments);
+        let models: Vec<String> = matches
+            .get_many::<String>("model")
+            .unwrap_or_default()
+            .map(|s| s.to_string())
+            .collect();
+
+        println!("1.项目根目录: {}", project_dir);
+        println!("2.后端环境: {:?}", environments);
+        println!("3.web端环境: {:?}", vue_environments);
+        println!("4.部署模块: {:?}", models);
 
         // 根据命令行参数选择执行部署函数
         if !environments.is_empty() {
-            println!("开始编译Java项目,请稍等...");
+            println!("5.开始编译Java项目,请稍等...");
             // 部署Java项目
-            if let Err(e) = deploy_java_project(&project_dir, &config_path, &environments) {
+            if let Err(e) = deploy_java_project(&project_dir, &config_path, &environments, &models) {
                 eprintln!("{}", e);
             }
         }
 
         if !vue_environments.is_empty() {
-            println!("开始编译Vue项目,比较慢,请稍等...");
+            println!("5.开始编译Vue项目,比较慢,请稍等...");
             // 部署Vue项目
             if let Err(e) = deploy_vue_project(&project_dir, &config_path, &vue_environments) {
                 eprintln!("{}", e);
@@ -113,12 +128,14 @@ fn main() {
     });
 }
 
-// 部署Java项目的函数
+/// 部署Java项目的函数
 fn deploy_java_project(
     project_dir: &str,
     config_path: &str,
     environments: &[String],
+    models: &[String],
 ) -> Result<(), String> {
+
     // 构建Java项目
     if let Err(e) = build_java_project(project_dir) {
         return Err(e);
@@ -144,6 +161,12 @@ fn deploy_java_project(
             let config = config.clone();
 
             let jar_name = jar_name.to_string();
+
+            if !models.is_empty() && !models.contains(&jar_name.split(".").next().expect("配置文件中jar_name格式错误,无法匹配模块名称").to_string()) {
+                println!("{}模块不参与部署", jar_name);
+                continue;
+            }
+
             let project_dir = project_dir.to_string();
             let env = env.clone();
             // 获取编译产物文件名称,组装上传路径
@@ -190,7 +213,7 @@ fn deploy_java_project(
     Ok(())
 }
 
-// 定义一个测量执行时间的函数
+/// 定义一个测量执行时间的函数
 fn measure_execution_time<F>(func: F) -> Duration
 where
     F: FnOnce(), // 接受一个闭包作为参数
@@ -210,7 +233,7 @@ where
     elapsed // 返回执行时间
 }
 
-// 部署Vue项目的函数
+/// 部署Vue项目的函数
 fn deploy_vue_project(
     project_dir: &str,
     config_path: &str,

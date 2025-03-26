@@ -189,8 +189,9 @@ pub fn upload_and_run_jar(
     // 读取本地文件
     let (data, file_size) = read_local_file(local_path)?;
     
-    // 创建SSH会话（只创建一次会话用于所有操作）
+    /// 创建SSH会话（只创建一次会话用于所有操作）
     const MAX_RETRIES: u32 = 3;
+    /// 重试间隔(秒)
     const RETRY_DELAY: Duration = Duration::from_secs(2);
     
     let sess = (0..MAX_RETRIES).find_map(|attempt| {
@@ -224,7 +225,7 @@ pub fn upload_and_run_jar(
             std::thread::sleep(RETRY_DELAY);
         }
         kill_process(&sess, remote_path).ok()
-    });
+    }).ok_or_else(|| format!("进程杀死失败，已达到最大重试次数({}次)", MAX_RETRIES))?;
     
     // 启动JAR包
     start_jar(&sess, remote_path, java_path, env)?;

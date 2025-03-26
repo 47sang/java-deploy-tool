@@ -110,17 +110,40 @@ fn execute_remote_command(sess: &Session, command: &str) -> Result<String, Strin
 
 /// 杀死远程服务器上的进程
 fn kill_process(sess: &Session, jar_path: &str) -> Result<(), String> {
-    let kill_cmd = format!(
-        "kill $(ps -ef | grep {} | grep -v grep | awk '{{print $2}}')",
+    // 1. 先获取进程ID列表
+    let find_pid_cmd = format!(
+        "ps -ef | grep {} | grep -v grep | awk '{{print $2}}'",
         jar_path
     );
+    let pids = execute_remote_command(sess, &find_pid_cmd)?;
     
+    if pids.trim().is_empty() {
+        // 没有找到进程，说明已经不存在
+        println!("没有找到需要杀死的进程: {}", jar_path);
+        return Ok(());
+    }
+
+    // 2. 执行kill命令
+    let kill_cmd = format!("kill {}", pids.trim());
     let output = execute_remote_command(sess, &kill_cmd)?;
     
     if !output.trim().is_empty() {
         println!("杀死进程命令输出: {}", output);
     }
+
+    // 3. 检查进程是否还存在
+    std::thread::sleep(Duration::from_secs(1)); // 等待1秒让进程结束
+    let check_cmd = format!(
+        "ps -p {} > /dev/null 2>&1; echo $?",
+        pids.trim().replace('\n', ",")
+    );
     
+    let exit_code = execute_remote_command(sess, &check_cmd)?;
+    if exit_code.trim() != "1" {
+        return Err(format!("进程杀死失败，进程可能仍在运行: {}", pids.trim()));
+    }
+    println!("进程已成功杀死: {}", pids.trim());
+
     Ok(())
 }
 
@@ -167,10 +190,25 @@ pub fn upload_and_run_jar(
     let (data, file_size) = read_local_file(local_path)?;
     
     // 创建SSH会话（只创建一次会话用于所有操作）
-    let sess = create_ssh_session(server, username, password)?;
+    const MAX_RETRIES: u32 = 3;
+    const RETRY_DELAY: Duration = Duration::from_secs(2);
     
-    // 上传文件
-    upload_to_remote(&sess, &data, file_size, remote_path)?;
+    let sess = (0..MAX_RETRIES).find_map(|attempt| {
+        if attempt > 0 {
+            println!("尝试重新创建SSH会话 (第{}次重试)...", attempt);
+            std::thread::sleep(RETRY_DELAY);
+        }
+        create_ssh_session(server, username, password).ok()
+    }).ok_or_else(|| format!("创建SSH会话失败，已达到最大重试次数({}次)", MAX_RETRIES))?;
+    
+    // 上传文件（带重试机制）
+    (0..MAX_RETRIES).find_map(|attempt| {
+        if attempt > 0 {
+            println!("尝试重新上传文件 (第{}次重试)...", attempt);
+            std::thread::sleep(RETRY_DELAY);
+        }
+        upload_to_remote(&sess, &data, file_size, remote_path).ok()
+    }).ok_or_else(|| format!("文件上传失败，已达到最大重试次数({}次)", MAX_RETRIES))?;
 
     println!(
         "JAR 文件上传成功! {} -> {} (大小: {:.2} MB)",
@@ -180,10 +218,13 @@ pub fn upload_and_run_jar(
     );
     
     // 杀死已存在的进程
-    if let Err(e) = kill_process(&sess, remote_path) {
-        println!("警告: 杀死旧进程失败: {}", e);
-        // 继续执行，不返回错误
-    }
+    (0..MAX_RETRIES).find_map(|attempt| {
+        if attempt > 0 {
+            println!("尝试重新杀死进程 (第{}次重试)...", attempt);
+            std::thread::sleep(RETRY_DELAY);
+        }
+        kill_process(&sess, remote_path).ok()
+    });
     
     // 启动JAR包
     start_jar(&sess, remote_path, java_path, env)?;

@@ -124,7 +124,7 @@ fn kill_process(sess: &Session, jar_path: &str) -> Result<(), String> {
     }
 
     // 2. 执行kill命令
-    let kill_cmd = format!("kill {}", pids.trim());
+    let kill_cmd = format!("kill -9 {}", pids.trim());
     let output = execute_remote_command(sess, &kill_cmd)?;
     
     if !output.trim().is_empty() {

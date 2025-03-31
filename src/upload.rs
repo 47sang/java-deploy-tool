@@ -59,6 +59,29 @@ fn upload_to_remote(
     file_size: u64,
     remote_path: &str,
 ) -> Result<(), String> {
+
+    // 检查远程文件路径是否存在
+    let check_path_cmd = format!("test -e {} && echo 'exists' || echo 'not exists'", remote_path);
+    match execute_remote_command(sess, &check_path_cmd) {
+        Ok(output) => {
+            if output.trim() == "exists" {
+                println!("远程文件已存在: {}", remote_path);
+                // 删除已存在的文件
+                let remove_cmd = format!("mv {} {}.bak", remote_path,remote_path);
+                execute_remote_command(sess, &remove_cmd)
+                    .map_err(|e| format!("标记远程文件为bak备份文件失败: {}", e))?;
+                println!("已标记备份存在的文件,{}.bak",remote_path);
+            }
+            if output.trim() == "not exists"  {
+                print!("远程文件不存在，或者路径错误，请检查配置文件remote_base_path属性是否正确: {}", remote_path)
+            }
+        }
+        Err(e) => {
+            return Err(format!("检查远程文件路径失败: {}", e));
+        }
+    }
+
+
     let mut remote_file = sess
         .scp_send(Path::new(remote_path), 0o644, file_size, None)
         .map_err(|e| format!("创建远程文件失败: {}", e))?;

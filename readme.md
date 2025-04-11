@@ -9,6 +9,14 @@
 ```bash
 cargo build --release
 ```
+
+## windows交叉编译
+```bash
+brew install mingw-w64
+rustup target add x86_64-pc-windows-gnu
+cargo build --release --target x86_64-pc-windows-msvc
+```
+
 ## 创建配置文件
 
 ```bash
@@ -51,6 +59,11 @@ deploy-tool -v dev,prod
 # springboot项目多环境部署
 ```bash
 deploy-tool -e dev,prod
+```
+
+# springboot项目多环境,多项目部署
+```bash
+deploy-tool -e dev,prod -m admin,client,websocket
 ```
 
 # TODO: 功能目标：

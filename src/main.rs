@@ -260,8 +260,8 @@ fn deploy_vue_project(
             build_vue_project(&project_dir, &config.scripts).expect("构建Vue项目失败");
 
             // 压缩产出目录文件zip
-            let output_dir = format!("{}\\{}", project_dir, config.output_dir);
-            let zip_path = format!("{}\\{}.zip", project_dir, config.output_dir);
+            let output_dir = format!("{}/{}", project_dir, config.output_dir);
+            let zip_path = format!("{}/{}.zip", project_dir, config.output_dir);
             let zip_file = File::create(&zip_path).expect("创建新的zip文件失败");
             let mut zip = ZipWriter::new(zip_file);
             let options = FileOptions::default().compression_method(CompressionMethod::Deflated);

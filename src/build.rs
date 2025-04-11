@@ -8,16 +8,26 @@ use std::fs::File;
 
 /// 打包 Java 项目
 pub fn build_java_project(project_dir: &str) -> Result<(), String> {
-    // 尝试执行mvn命令，如果命令不存在会在spawn时返回错误
-    let mut child = Command::new("cmd")
-        .args(["/c", "mvn"])
-        .arg("clean")
-        .arg("package")
-        .current_dir(project_dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("执行mvn命令失败: {}", e))?;
+    // 检测操作系统类型
+    let is_windows = cfg!(target_os = "windows");
+    
+    // 根据操作系统类型选择适当的命令
+    let mut child = if is_windows {
+        Command::new("cmd")
+            .args(["/c", "mvn", "clean", "package"])
+            .current_dir(project_dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+    } else {
+        Command::new("mvn")
+            .args(["clean", "package"])
+            .current_dir(project_dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+    }
+    .map_err(|e| format!("执行mvn命令失败: {}", e))?;
 
     // 读取并显示标准输出
     if let Some(stdout) = child.stdout.take() {
@@ -53,13 +63,26 @@ pub fn build_java_project(project_dir: &str) -> Result<(), String> {
 
 /// 打包 Vue 项目
 pub fn build_vue_project(project_dir: &str,scripts: &str) -> Result<(), String> {
-    let mut child = Command::new("cmd")
-        .args(["/c", "npm", "run", scripts])
-        .current_dir(project_dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("执行npm命令失败: {}", e))?;
+    // 检测操作系统类型
+    let is_windows = cfg!(target_os = "windows");
+    
+    // 根据操作系统类型选择适当的命令
+    let mut child = if is_windows {
+        Command::new("cmd")
+            .args(["/c", "npm", "run", scripts])
+            .current_dir(project_dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+    } else {
+        Command::new("npm")
+            .args(["run", scripts])
+            .current_dir(project_dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+    }
+    .map_err(|e| format!("执行npm命令失败: {}", e))?;
 
     let status = child.wait()
         .map_err(|e| format!("等待命令完成失败: {}", e))?;

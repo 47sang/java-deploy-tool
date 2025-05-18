@@ -30,6 +30,7 @@ fn create_ssh_session(server: &str, username: &str, password: &str) -> Result<Se
 
 /// 读取本地文件
 fn read_local_file(local_path: &str) -> Result<(Vec<u8>, u64), String> {
+    println!("读取本地文件: {}", local_path);
     let file_size = fs::metadata(local_path)
         .map_err(|e| format!("无法获取文件大小: {}", e))?
         .len();

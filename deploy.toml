@@ -39,3 +39,14 @@ jar_files = [
 ]
 scripts = "prod:test"
 output_dir = "dist-test"
+
+# 单模块项目示例
+[environments.single]
+server = "single-server:22"
+username = "single-user"
+password = "single-password"
+java_path = "/usr/bin/java"
+remote_base_path = "/opt/single/app"
+jar_files = "application.jar"
+scripts = "prod"
+output_dir = "dist"

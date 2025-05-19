@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use serde_json::Value;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DeployConfig {
@@ -15,8 +16,8 @@ pub struct DeployConfig {
     pub java_path: String,
     /// 远程基础路径
     pub remote_base_path: String,
-    /// jar文件
-    pub jar_files: Vec<String>,
+    /// jar文件 (可以是字符串或字符串数组)
+    pub jar_files: Value,
     /// vue打包执行命令脚本
     pub scripts: String,
     /// vue编译产物输出目录
@@ -39,7 +40,7 @@ impl DeployConfig {
                 password: "lykj".to_string(),
                 java_path: "/opt/soft/zulu11/bin/java".to_string(),
                 remote_base_path: "/opt/xinxuan1v1".to_string(),
-                jar_files: vec!["admin.jar", "client.jar", "websocket.jar"].iter().map(|s| s.to_string()).collect(),
+                jar_files: serde_json::json!(["admin.jar", "client.jar", "websocket.jar"]),
                 scripts: "prod:test".to_string(),
                 output_dir: "dist-test".to_string(),
             },
@@ -52,7 +53,7 @@ impl DeployConfig {
                 password: "test-password".to_string(),
                 java_path: "/usr/bin/java".to_string(),
                 remote_base_path: "/opt/test/apps".to_string(),
-                jar_files: vec!["admin.jar", "client.jar", "websocket.jar"].iter().map(|s| s.to_string()).collect(),
+                jar_files: serde_json::json!(["admin.jar", "client.jar", "websocket.jar"]),
                 scripts: "prod:test".to_string(),
                 output_dir: "dist-test".to_string(),
             },
@@ -65,7 +66,7 @@ impl DeployConfig {
                 password: "prod-password".to_string(),
                 java_path: "/usr/java/latest/bin/java".to_string(),
                 remote_base_path: "/opt/prod/apps".to_string(),
-                jar_files: vec!["admin.jar", "client.jar", "websocket.jar"].iter().map(|s| s.to_string()).collect(),
+                jar_files: serde_json::json!(["admin.jar", "client.jar", "websocket.jar"]),
                 scripts: "prod".to_string(),
                 output_dir: "dist".to_string(),
             },

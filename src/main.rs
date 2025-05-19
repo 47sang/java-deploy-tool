@@ -13,10 +13,11 @@ use upload::{upload_file, upload_and_run_jar};
 
 use zip::CompressionMethod;
 use zip::{write::FileOptions, ZipWriter};
+use serde_json::Value;
 
 fn main() {
     let matches = Command::new("deploy-tool")
-        .version("1.0")
+        .version("1.3")
         .author("士钰 <zhoushiyu92@gmail.com>")
         .about("一键部署Java和Vue项目,支持多环境部署,支持多模块部署")
         .arg(
@@ -156,52 +157,55 @@ fn deploy_java_project(
                 continue;
             }
         };
-        for jar_name in &config.jar_files {
-            // 应用命令行参数覆盖
-            let config = config.clone();
 
-            let jar_name = jar_name.to_string();
+        // 处理jar_files字段，根据类型确定是单模块还是多模块
+        match &config.jar_files {
+            Value::Array(jar_array) => {
+                // 多模块项目情况
+                for jar_value in jar_array {
+                    if let Value::String(jar_name) = jar_value {
+                        // 应用命令行参数覆盖
+                        let config = config.clone();
 
-            if !models.is_empty() && !models.contains(&jar_name.split(".").next().expect("配置文件中jar_name格式错误,无法匹配模块名称").to_string()) {
-                println!("{}模块不参与部署", jar_name);
+                        if !models.is_empty() && !models.contains(&jar_name.split('.').next().expect("配置文件中jar_name格式错误,无法匹配模块名称").to_string()) {
+                            println!("{}模块不参与部署", jar_name);
+                            continue;
+                        }
+
+                        let project_dir = project_dir.to_string();
+                        let env = env.clone();
+                        // 多模块项目，获取编译产物路径
+                        let jar_path = format!(
+                            "{}/{}/target/{}",
+                            project_dir,
+                            jar_name.split('.').next().unwrap(),
+                            jar_name
+                        );
+
+                        spawn_deploy_thread(jar_name, jar_path, config, env, &mut handles);
+                    }
+                }
+            },
+            Value::String(jar_name) => {
+                // 单模块项目情况
+                let config = config.clone();
+
+                if !models.is_empty() && !models.contains(&jar_name.split('.').next().expect("配置文件中jar_name格式错误,无法匹配模块名称").to_string()) {
+                    println!("{}模块不参与部署", jar_name);
+                    continue;
+                }
+
+                let project_dir = project_dir.to_string();
+                let env = env.clone();
+                // 单模块项目，获取编译产物路径
+                let jar_path = format!("{}/target/{}", project_dir, jar_name);
+                
+                spawn_deploy_thread(jar_name, jar_path, config, env, &mut handles);
+            },
+            _ => {
+                eprintln!("配置文件中jar_files格式错误，必须是字符串或字符串数组");
                 continue;
             }
-
-            let project_dir = project_dir.to_string();
-            let env = env.clone();
-            // 获取编译产物文件名称,组装上传路径
-            let jar_path = if config.jar_files.len() == 1 {
-                format!("{}/target/{}", project_dir, jar_name)
-            } else {
-                format!(
-                    "{}/{}/target/{}",
-                    project_dir,
-                    jar_name.split(".").next().unwrap(),
-                    jar_name
-                )
-            };
-
-            let handle = thread::spawn(move || {
-                let remote_path = format!("{}/{}", config.remote_base_path, jar_name);
-
-                println!("开始部署 {} 到 {} 环境", jar_name, env);
-
-                // 上传并运行 JAR 包
-                if let Err(e) = upload_and_run_jar(
-                    &config.server,
-                    &config.username,
-                    &config.password,
-                    &jar_path,
-                    &remote_path,
-                    &config.java_path,
-                    &env,
-                ) {
-                    eprintln!("部署失败 {} ({}环境): {}", jar_name, env, e);
-                    return;
-                }
-                println!("部署成功: {} ({}环境)", jar_name, env);
-            });
-            handles.push(handle);
         }
     }
 
@@ -211,6 +215,39 @@ fn deploy_java_project(
     }
 
     Ok(())
+}
+
+// 创建并运行部署线程的辅助函数
+fn spawn_deploy_thread(
+    jar_name: &str,
+    jar_path: String,
+    config: DeployConfig,
+    env: String,
+    handles: &mut Vec<thread::JoinHandle<()>>
+) {
+    let jar_name = jar_name.to_string();
+    
+    let handle = thread::spawn(move || {
+        let remote_path = format!("{}/{}", config.remote_base_path, jar_name);
+
+        println!("开始部署 {} 到 {} 环境", jar_name, env);
+
+        // 上传并运行 JAR 包
+        if let Err(e) = upload_and_run_jar(
+            &config.server,
+            &config.username,
+            &config.password,
+            &jar_path,
+            &remote_path,
+            &config.java_path,
+            &env,
+        ) {
+            eprintln!("部署失败 {} ({}环境): {}", jar_name, env, e);
+            return;
+        }
+        println!("部署成功: {} ({}环境)", jar_name, env);
+    });
+    handles.push(handle);
 }
 
 /// 定义一个测量执行时间的函数

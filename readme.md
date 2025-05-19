@@ -36,12 +36,31 @@ password = "test-password"
 java_path = "/usr/bin/java"
 # 远程服务器jar包部署的目录路径
 remote_base_path = "/opt/test/apps"
-# 当前项目中的jar包文件名,如果单项目则只有一个,多模块项目则有多个,要保持数组类型
+# 当前项目中的jar包文件名,多模块项目则有多个,要保持数组类型
 jar_files = [
     "admin.jar",
     "client.jar",
     "websocket.jar",
 ]
+# npm run 后面跟随的后缀命令
+scripts = "prod:test"
+# 这个编译产物的输出文件夹名称
+output_dir = "dist-test"
+
+
+[environments.demo]
+# 远程服务器地址和端口
+server = "test-server:22"
+# 远程服务器用户名
+username = "test-user"
+# 远程服务器密码
+password = "test-password"
+# 远程服务器java程序路径
+java_path = "/usr/bin/java"
+# 远程服务器jar包部署的目录路径
+remote_base_path = "/opt/test/apps"
+# 当前项目中的jar包文件名,如果单项目则只有一个字符串
+jar_files = "admin.jar"
 # npm run 后面跟随的后缀命令
 scripts = "prod:test"
 # 这个编译产物的输出文件夹名称

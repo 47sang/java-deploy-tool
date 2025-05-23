@@ -4,6 +4,7 @@ use std::net::TcpStream;
 use std::path::Path;
 use std::time::Duration;
 use std::fs;
+use indicatif::{ProgressBar, ProgressStyle};
 
 /// 创建SSH会话最大重试次数
 const MAX_RETRIES: u32 = 3;
@@ -36,8 +37,7 @@ fn read_local_file(local_path: &str) -> Result<(Vec<u8>, u64), String> {
         .len();
 
     println!(
-        "开始上传文件: {} (大小: {:.2} MB)",
-        local_path,
+        "已读取的文件大小: {:.2} MB",
         bytes_to_mb(file_size)
     );
 
@@ -82,14 +82,18 @@ fn upload_to_remote(
         }
     }
 
-
     let mut remote_file = sess
         .scp_send(Path::new(remote_path), 0o644, file_size, None)
         .map_err(|e| format!("创建远程文件失败: {}", e))?;
 
-    remote_file
-        .write_all(data)
-        .map_err(|e| format!("写入远程文件失败: {}", e))?;
+    // 使用进度条写入器
+    {
+        let mut progress_writer = ProgressWriter::new(&mut remote_file, file_size);
+        progress_writer
+            .write_all(data)
+            .map_err(|e| format!("写入远程文件失败: {}", e))?;
+    }
+
     remote_file
         .send_eof()
         .map_err(|e| format!("发送EOF失败: {}", e))?;
@@ -287,22 +291,39 @@ pub fn upload_and_run_jar(
         .ok_or_else(|| format!("创建SSH会话失败，已达到最大重试次数({}次)", MAX_RETRIES))?;
 
     // 上传文件（带重试机制）
+    let upload_progress = ProgressBar::new_spinner();
+    upload_progress.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.green} {msg}")
+            .unwrap(),
+    );
+    upload_progress.set_message("准备上传文件...");
+
     (0..MAX_RETRIES)
         .find_map(|attempt| {
             if attempt > 0 {
-                println!("尝试重新上传文件 (第{}次重试)...", attempt);
+                upload_progress.set_message(format!("尝试重新上传文件 (第{}次重试)...", attempt));
                 std::thread::sleep(RETRY_DELAY);
             }
-            upload_to_remote(&sess, &data, file_size, remote_path).ok()
+            match upload_to_remote(&sess, &data, file_size, remote_path) {
+                Ok(_) => Some(()),
+                Err(e) => {
+                    upload_progress.set_message(format!("文件上传失败: {}，正在重试...", e));
+                    None
+                }
+            }
         })
-        .ok_or_else(|| format!("文件上传失败，已达到最大重试次数({}次)", MAX_RETRIES))?;
+        .ok_or_else(|| {
+            upload_progress.finish_with_message("文件上传失败，已达到最大重试次数");
+            format!("文件上传失败，已达到最大重试次数({}次)", MAX_RETRIES)
+        })?;
 
-    println!(
+    upload_progress.finish_with_message(format!(
         "JAR 文件上传成功! {} -> {} (大小: {:.2} MB)",
         local_path,
         remote_path,
         bytes_to_mb(file_size)
-    );
+    ));
 
     // 杀死已存在的进程
     (0..MAX_RETRIES)
@@ -318,7 +339,6 @@ pub fn upload_and_run_jar(
     // 启动JAR包
     start_jar(&sess, remote_path, java_path, env)?;
 
-    println!("{}环境JAR包部署和启动成功: {}", env, remote_path);
     Ok(())
 }
 
@@ -342,6 +362,15 @@ pub fn upload_file(
     // 上传文件
     upload_to_remote(&sess, &data, file_size, &remote_zip_path)?;
 
+    // 解压进度条
+    let unzip_progress = ProgressBar::new_spinner();
+    unzip_progress.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.green} {msg}")
+            .unwrap(),
+    );
+    unzip_progress.set_message("正在解压文件...");
+
     // 解压命令：先删除目标目录，然后解压zip文件
     // 使用-o选项覆盖现有文件，不提示
     let unzip_cmd = format!(
@@ -350,13 +379,70 @@ pub fn upload_file(
     );
 
     // 执行解压命令
-    execute_remote_command(&sess, &unzip_cmd)?;
+    match execute_remote_command(&sess, &unzip_cmd) {
+        Ok(_) => {
+            unzip_progress.finish_with_message(format!(
+                "文件上传并解压成功! {} -> {} (大小: {:.2} MB)",
+                local_path,
+                remote_zip_path,
+                bytes_to_mb(file_size)
+            ));
+        }
+        Err(e) => {
+            unzip_progress.finish_with_message(format!("解压失败: {}", e));
+            return Err(e);
+        }
+    }
 
-    println!(
-        "文件上传成功! {} -> {} (大小: {:.2} MB)",
-        local_path,
-        remote_zip_path,
-        bytes_to_mb(file_size)
-    );
     Ok(())
+}
+
+
+
+
+
+/// 自定义写入器，用于跟踪上传进度
+struct ProgressWriter<'a> {
+    inner: &'a mut dyn Write,
+    progress_bar: ProgressBar,
+    bytes_written: u64,
+}
+
+impl<'a> ProgressWriter<'a> {
+    fn new(inner: &'a mut dyn Write, total_size: u64) -> Self {
+        let progress_bar = ProgressBar::new(total_size);
+        progress_bar.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+                .unwrap()
+                .progress_chars("#>-"),
+        );
+
+        ProgressWriter {
+            inner,
+            progress_bar,
+            bytes_written: 0,
+        }
+    }
+}
+
+impl<'a> Write for ProgressWriter<'a> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let result = self.inner.write(buf);
+        if let Ok(size) = result {
+            self.bytes_written += size as u64;
+            self.progress_bar.set_position(self.bytes_written);
+        }
+        result
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+impl<'a> Drop for ProgressWriter<'a> {
+    fn drop(&mut self) {
+        self.progress_bar.finish_with_message("上传完成");
+    }
 }

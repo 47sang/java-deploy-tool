@@ -297,7 +297,6 @@ pub fn upload_and_run_jar(
             .template("{spinner:.green} {msg}")
             .unwrap(),
     );
-    upload_progress.set_message("准备上传文件...");
 
     (0..MAX_RETRIES)
         .find_map(|attempt| {

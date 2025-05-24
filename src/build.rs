@@ -54,7 +54,7 @@ pub fn build_java_project(project_dir: &str) -> Result<(), String> {
                 .filter_map(|line| line.ok())
                 .collect::<Vec<String>>()
                 .join("\n");            
-            Err(format!("构建失败:请检查mvn是否配置在环境变量中\n{}", error))
+            Err(format!("构建失败:请检查mvn是否配置在环境变量中\n{}\n建议用 'mvn clean package -DskipTests -e' 或 '-X' 获取详细日志", error))
         } else {
             Err("构建失败，无法获取错误信息".to_string())
         }

@@ -17,6 +17,12 @@ rustup target add x86_64-pc-windows-gnu
 cargo build --release --target x86_64-pc-windows-msvc
 ```
 
+## 交叉编译linux程序产物
+```bash
+docker pull rust:latest
+docker run --rm -v /c/Users/zhou-/Desktop/temp/rust/java-deploy-tool:/opt -w /opt rust:latest bash -c "rustup target add x86_64-unknown-linux-gnu && cargo build --release --target x86_64-unknown-linux-gnu"
+```
+
 ## 创建配置文件
 
 ```bash

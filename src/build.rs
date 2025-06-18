@@ -14,7 +14,7 @@ pub fn build_java_project(project_dir: &str) -> Result<(), String> {
     // 根据操作系统类型选择适当的命令
     let mut child = if is_windows {
         Command::new("cmd")
-            .args(["/c", "mvn", "clean", "package", "-DskipTests"])
+            .args(["/c", "mvnd", "clean", "package", "-DskipTests"])
             .current_dir(project_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

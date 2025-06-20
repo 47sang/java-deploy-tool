@@ -61,6 +61,13 @@ fn main() {
                 .required(false)
                 .default_value("."),
         )
+        .arg(
+            Arg::new("upload-only")
+                .short('u')
+                .long("upload-only")
+                .help("仅上传文件到服务器，不执行命令")
+                .action(clap::ArgAction::SetTrue),
+        )
         .get_matches();
 
     // 调用方法并测量执行时间
@@ -105,24 +112,27 @@ fn main() {
             .map(|s| s.to_string())
             .collect();
 
+        let upload_only = matches.get_flag("upload-only");
+
         println!("1.项目根目录: {}", project_dir);
         println!("2.后端环境: {:?}", environments);
         println!("3.web端环境: {:?}", vue_environments);
         println!("4.部署模块: {:?}", models);
+        println!("5.仅上传模式: {}", upload_only);
 
         // 根据命令行参数选择执行部署函数
         if !environments.is_empty() {
-            println!("5.开始编译Java项目,请稍等...");
+            println!("6.开始编译Java项目,请稍等...");
             // 部署Java项目
-            if let Err(e) = deploy_java_project(&project_dir, &config_path, &environments, &models) {
+            if let Err(e) = deploy_java_project(&project_dir, &config_path, &environments, &models, upload_only) {
                 eprintln!("{}", e);
             }
         }
 
         if !vue_environments.is_empty() {
-            println!("5.开始编译Vue项目,比较慢,请稍等...");
+            println!("6.开始编译Vue项目,比较慢,请稍等...");
             // 部署Vue项目
-            if let Err(e) = deploy_vue_project(&project_dir, &config_path, &vue_environments) {
+            if let Err(e) = deploy_vue_project(&project_dir, &config_path, &vue_environments, upload_only) {
                 eprintln!("{}", e);
             }
         }
@@ -135,6 +145,7 @@ fn deploy_java_project(
     config_path: &str,
     environments: &[String],
     models: &[String],
+    upload_only: bool,
 ) -> Result<(), String> {
 
     // 构建Java项目
@@ -182,7 +193,7 @@ fn deploy_java_project(
                             jar_name
                         );
 
-                        spawn_deploy_thread(jar_name, jar_path, config, env, &mut handles);
+                        spawn_deploy_thread(jar_name, jar_path, config.clone(), env, upload_only, &mut handles);
                     }
                 }
             },
@@ -200,7 +211,7 @@ fn deploy_java_project(
                 // 单模块项目，获取编译产物路径
                 let jar_path = format!("{}/target/{}", project_dir, jar_name);
                 
-                spawn_deploy_thread(jar_name, jar_path, config, env, &mut handles);
+                spawn_deploy_thread(jar_name, jar_path, config.clone(), env, upload_only, &mut handles);
             },
             _ => {
                 eprintln!("配置文件中jar_files格式错误，必须是字符串或字符串数组");
@@ -223,6 +234,7 @@ fn spawn_deploy_thread(
     jar_path: String,
     config: DeployConfig,
     env: String,
+    upload_only: bool,
     handles: &mut Vec<thread::JoinHandle<()>>
 ) {
     let jar_name = jar_name.to_string();
@@ -230,22 +242,40 @@ fn spawn_deploy_thread(
     let handle = thread::spawn(move || {
         let remote_path = format!("{}/{}", config.remote_base_path, jar_name);
 
-        println!("开始部署 {} 到 {} 环境", jar_name, env);
+        // 命令行参数优先，如果没有设置则使用配置文件中的设置
+        let final_upload_only = upload_only || config.upload_only;
 
-        // 上传并运行 JAR 包
-        if let Err(e) = upload_and_run_jar(
-            &config.server,
-            &config.username,
-            &config.password,
-            &jar_path,
-            &remote_path,
-            &config.java_path,
-            &env,
-        ) {
-            eprintln!("部署失败 {} ({}环境): {}", jar_name, env, e);
-            return;
+        if final_upload_only {
+            println!("开始上传 {} 到 {} 环境", jar_name, env);
+            // 仅上传文件，不执行任何命令
+            if let Err(e) = upload::upload_jar_only(
+                &config.server,
+                &config.username,
+                &config.password,
+                &jar_path,
+                &remote_path,
+            ) {
+                eprintln!("上传失败 {} ({}环境): {}", jar_name, env, e);
+                return;
+            }
+            println!("上传成功: {} ({}环境)", jar_name, env);
+        } else {
+            println!("开始部署 {} 到 {} 环境", jar_name, env);
+            // 上传并运行 JAR 包
+            if let Err(e) = upload_and_run_jar(
+                &config.server,
+                &config.username,
+                &config.password,
+                &jar_path,
+                &remote_path,
+                &config.java_path,
+                &env,
+            ) {
+                eprintln!("部署失败 {} ({}环境): {}", jar_name, env, e);
+                return;
+            }
+            println!("部署成功: {} ({}环境)", jar_name, env);
         }
-        println!("部署成功: {} ({}环境)", jar_name, env);
     });
     handles.push(handle);
 }
@@ -275,6 +305,7 @@ fn deploy_vue_project(
     project_dir: &str,
     config_path: &str,
     environments: &[String],
+    upload_only: bool,
 ) -> Result<(), String> {
     // 为每个环境创建部署任务
     let mut handles = vec![];
@@ -308,17 +339,36 @@ fn deploy_vue_project(
             // 上传zip文件
             let remote_path = format!("{}/{}", config.remote_base_path, config.output_dir);
 
-            if let Err(e) = upload_file(
-                &config.server,
-                &config.username,
-                &config.password,
-                &zip_path,
-                &remote_path,
-            ) {
-                eprintln!("上传失败 {} ({}环境): {}", config.output_dir, env, e);
-                return;
+            // 命令行参数优先，如果没有设置则使用配置文件中的设置
+            let final_upload_only = upload_only || config.upload_only;
+
+            if final_upload_only {
+                // 仅上传文件，不执行解压等命令
+                if let Err(e) = upload::upload_zip_only(
+                    &config.server,
+                    &config.username,
+                    &config.password,
+                    &zip_path,
+                    &remote_path,
+                ) {
+                    eprintln!("上传失败 {} ({}环境): {}", config.output_dir, env, e);
+                    return;
+                }
+                println!("上传成功: {} ({}环境)", config.output_dir, env);
+            } else {
+                // 上传并解压
+                if let Err(e) = upload_file(
+                    &config.server,
+                    &config.username,
+                    &config.password,
+                    &zip_path,
+                    &remote_path,
+                ) {
+                    eprintln!("上传失败 {} ({}环境): {}", config.output_dir, env, e);
+                    return;
+                }
+                println!("上传成功: {} ({}环境)", config.output_dir, env);
             }
-            println!("上传成功: {} ({}环境)", config.output_dir, env);
         });
         handles.push(handle);
     }

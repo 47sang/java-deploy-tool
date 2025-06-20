@@ -11,6 +11,7 @@ jar_files = [
 ]
 scripts = "prod:test"
 output_dir = "dist-test"
+upload_only = false
 
 [environments.prod]
 server = "prod-server:22"
@@ -25,6 +26,7 @@ jar_files = [
 ]
 scripts = "prod"
 output_dir = "dist"
+upload_only = false
 
 [environments.dev]
 server = "192.168.31.60:22"
@@ -39,6 +41,7 @@ jar_files = [
 ]
 scripts = "prod:test"
 output_dir = "dist-test"
+upload_only = false
 
 # 单模块项目示例
 [environments.single]
@@ -50,3 +53,19 @@ remote_base_path = "/opt/single/app"
 jar_files = "application.jar"
 scripts = "prod"
 output_dir = "dist"
+upload_only = false
+
+# 仅上传示例环境
+[environments.upload-only-example]
+server = "upload-server:22"
+username = "upload-user"
+password = "upload-password"
+java_path = "/usr/bin/java"
+remote_base_path = "/opt/upload/apps"
+jar_files = [
+    "admin.jar",
+    "client.jar",
+]
+scripts = "prod"
+output_dir = "dist"
+upload_only = true

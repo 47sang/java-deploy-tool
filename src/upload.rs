@@ -359,6 +359,94 @@ pub fn upload_and_run_jar(
     Ok(())
 }
 
+/// 仅上传JAR文件，不进行进程管理
+pub fn upload_jar_only(
+    server: &str,
+    username: &str,
+    password: &str,
+    local_path: &str,
+    remote_path: &str,
+) -> Result<(), String> {
+    // 读取本地文件
+    let (data, file_size) = read_local_file(local_path)?;
+
+    let sess = (0..MAX_RETRIES)
+        .find_map(|attempt| {
+            if attempt > 0 {
+                println!("尝试重新创建SSH会话 (第{}次重试)...", attempt);
+                std::thread::sleep(RETRY_DELAY);
+            }
+            create_ssh_session(server, username, password).ok()
+        })
+        .ok_or_else(|| format!("创建SSH会话失败，已达到最大重试次数({}次)", MAX_RETRIES))?;
+
+    // 上传文件（带重试机制）
+    let upload_progress = ProgressBar::new_spinner();
+    upload_progress.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.green} {msg}")
+            .unwrap(),
+    );
+
+    (0..MAX_RETRIES)
+        .find_map(|attempt| {
+            if attempt > 0 {
+                upload_progress.set_message(format!("尝试重新上传文件 (第{}次重试)...", attempt));
+                std::thread::sleep(RETRY_DELAY);
+            }
+            match upload_to_remote(&sess, &data, file_size, remote_path) {
+                Ok(_) => Some(()),
+                Err(e) => {
+                    upload_progress.set_message(format!("文件上传失败: {}，正在重试...", e));
+                    None
+                }
+            }
+        })
+        .ok_or_else(|| {
+            upload_progress.finish_with_message("文件上传失败，已达到最大重试次数");
+            format!("文件上传失败，已达到最大重试次数({}次)", MAX_RETRIES)
+        })?;
+
+    upload_progress.finish_with_message(format!(
+        "JAR 文件上传成功! {} -> {} (大小: {:.2} MB)",
+        local_path,
+        remote_path,
+        bytes_to_mb(file_size)
+    ));
+
+    Ok(())
+}
+
+/// 仅上传ZIP文件，不进行解压
+pub fn upload_zip_only(
+    server: &str,
+    username: &str,
+    password: &str,
+    local_path: &str,
+    remote_path: &str,
+) -> Result<(), String> {
+    // 读取本地文件
+    let (data, file_size) = read_local_file(local_path)?;
+
+    // 创建SSH会话
+    let sess = create_ssh_session(server, username, password)?;
+
+    // 构建远程zip路径
+    let remote_zip_path = format!("{}.zip", remote_path);
+
+    // 上传文件
+    upload_to_remote(&sess, &data, file_size, &remote_zip_path)?;
+
+    println!(
+        "ZIP 文件上传成功! {} -> {} (大小: {:.2} MB)",
+        local_path,
+        remote_zip_path,
+        bytes_to_mb(file_size)
+    );
+
+    Ok(())
+}
+
 /// 上传zip文件
 pub fn upload_file(
     server: &str,

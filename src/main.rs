@@ -118,7 +118,31 @@ fn main() {
         println!("2.后端环境: {:?}", environments);
         println!("3.web端环境: {:?}", vue_environments);
         println!("4.部署模块: {:?}", models);
-        println!("5.仅上传模式: {}", upload_only);
+        
+        // 显示upload_only的实际配置情况
+        if upload_only {
+            println!("5.仅上传模式: {} (来自命令行参数)", upload_only);
+        } else {
+            println!("5.仅上传模式: (将根据各环境配置文件决定)");
+            // 如果有环境参数，显示每个环境的upload_only配置
+            if !environments.is_empty() || !vue_environments.is_empty() {
+                let all_envs: std::collections::HashSet<String> = environments.iter()
+                    .chain(vue_environments.iter())
+                    .cloned()
+                    .collect();
+                
+                for env in &all_envs {
+                    match DeployConfig::from_file(&config_path, env) {
+                        Ok(config) => {
+                            println!("   - {} 环境配置: upload_only = {}", env, config.upload_only);
+                        }
+                        Err(_) => {
+                            println!("   - {} 环境配置: 读取失败", env);
+                        }
+                    }
+                }
+            }
+        }
 
         // 根据命令行参数选择执行部署函数
         if !environments.is_empty() {
@@ -242,8 +266,14 @@ fn spawn_deploy_thread(
     let handle = thread::spawn(move || {
         let remote_path = format!("{}/{}", config.remote_base_path, jar_name);
 
-        // 命令行参数优先，如果没有设置则使用配置文件中的设置
-        let final_upload_only = upload_only || config.upload_only;
+        // 命令行参数优先，如果命令行没有指定则使用配置文件中的设置
+        let final_upload_only = if upload_only {
+            // 如果命令行指定了 --upload-only，则使用命令行的值
+            true
+        } else {
+            // 如果命令行没有指定 --upload-only，则使用配置文件中的值
+            config.upload_only
+        };
 
         if final_upload_only {
             println!("开始上传 {} 到 {} 环境", jar_name, env);
@@ -339,8 +369,14 @@ fn deploy_vue_project(
             // 上传zip文件
             let remote_path = format!("{}/{}", config.remote_base_path, config.output_dir);
 
-            // 命令行参数优先，如果没有设置则使用配置文件中的设置
-            let final_upload_only = upload_only || config.upload_only;
+            // 命令行参数优先，如果命令行没有指定则使用配置文件中的设置
+            let final_upload_only = if upload_only {
+                // 如果命令行指定了 --upload-only，则使用命令行的值
+                true
+            } else {
+                // 如果命令行没有指定 --upload-only，则使用配置文件中的值
+                config.upload_only
+            };
 
             if final_upload_only {
                 // 仅上传文件，不执行解压等命令

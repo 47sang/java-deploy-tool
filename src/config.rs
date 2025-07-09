@@ -22,6 +22,9 @@ pub struct DeployConfig {
     pub scripts: String,
     /// vue编译产物输出目录
     pub output_dir: String,
+    /// 是否仅上传文件，不执行命令 (可选，默认为false)
+    #[serde(default)]
+    pub upload_only: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -43,6 +46,7 @@ impl DeployConfig {
                 jar_files: serde_json::json!(["admin.jar", "client.jar", "websocket.jar"]),
                 scripts: "prod:test".to_string(),
                 output_dir: "dist-test".to_string(),
+                upload_only: false,
             },
         );
         environments.insert(
@@ -56,6 +60,7 @@ impl DeployConfig {
                 jar_files: serde_json::json!(["admin.jar", "client.jar", "websocket.jar"]),
                 scripts: "prod:test".to_string(),
                 output_dir: "dist-test".to_string(),
+                upload_only: false,
             },
         );
         environments.insert(
@@ -69,6 +74,7 @@ impl DeployConfig {
                 jar_files: serde_json::json!(["admin.jar", "client.jar", "websocket.jar"]),
                 scripts: "prod".to_string(),
                 output_dir: "dist".to_string(),
+                upload_only: false,
             },
         );
 

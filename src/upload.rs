@@ -2,8 +2,9 @@ use ssh2::Session;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::fs;
+use indicatif::{ProgressBar, ProgressStyle};
 
 /// 创建SSH会话最大重试次数
 const MAX_RETRIES: u32 = 3;
@@ -13,6 +14,45 @@ const RETRY_DELAY: Duration = Duration::from_secs(2);
 /// 将字节转换为 MB
 fn bytes_to_mb(bytes: u64) -> f64 {
     bytes as f64 / (1024.0 * 1024.0)
+}
+
+/// 格式化字节数为可读格式
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
+    let mut size = bytes as f64;
+    let mut unit_index = 0;
+
+    while size >= 1024.0 && unit_index < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit_index += 1;
+    }
+
+    if unit_index == 0 {
+        format!("{} {}", bytes, UNITS[unit_index])
+    } else {
+        format!("{:.1} {}", size, UNITS[unit_index])
+    }
+}
+
+/// 格式化时间为可读格式
+fn format_duration(seconds: f64) -> String {
+    let total_seconds = seconds as i64;
+    
+    if total_seconds < 60 {
+        format!("{}s", total_seconds)
+    } else if total_seconds < 3600 {
+        let minutes = total_seconds / 60;
+        let secs = total_seconds % 60;
+        format!("{}m {}s", minutes, secs)
+    } else if total_seconds < 86400 {
+        let hours = total_seconds / 3600;
+        let minutes = (total_seconds % 3600) / 60;
+        format!("{}h {}m", hours, minutes)
+    } else {
+        let days = total_seconds / 86400;
+        let hours = (total_seconds % 86400) / 3600;
+        format!("{}d {}h", days, hours)
+    }
 }
 
 /// 创建SSH会话
@@ -36,8 +76,7 @@ fn read_local_file(local_path: &str) -> Result<(Vec<u8>, u64), String> {
         .len();
 
     println!(
-        "开始上传文件: {} (大小: {:.2} MB)",
-        local_path,
+        "已读取的文件大小: {:.2} MB",
         bytes_to_mb(file_size)
     );
 
@@ -82,14 +121,18 @@ fn upload_to_remote(
         }
     }
 
-
     let mut remote_file = sess
         .scp_send(Path::new(remote_path), 0o644, file_size, None)
         .map_err(|e| format!("创建远程文件失败: {}", e))?;
 
-    remote_file
-        .write_all(data)
-        .map_err(|e| format!("写入远程文件失败: {}", e))?;
+    // 使用进度条写入器
+    {
+        let mut progress_writer = ProgressWriter::new(&mut remote_file, file_size);
+        progress_writer
+            .write_all(data)
+            .map_err(|e| format!("写入远程文件失败: {}", e))?;
+    }
+
     remote_file
         .send_eof()
         .map_err(|e| format!("发送EOF失败: {}", e))?;
@@ -287,22 +330,38 @@ pub fn upload_and_run_jar(
         .ok_or_else(|| format!("创建SSH会话失败，已达到最大重试次数({}次)", MAX_RETRIES))?;
 
     // 上传文件（带重试机制）
+    let upload_progress = ProgressBar::new_spinner();
+    upload_progress.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.green} {msg}")
+            .unwrap(),
+    );
+
     (0..MAX_RETRIES)
         .find_map(|attempt| {
             if attempt > 0 {
-                println!("尝试重新上传文件 (第{}次重试)...", attempt);
+                upload_progress.set_message(format!("尝试重新上传文件 (第{}次重试)...", attempt));
                 std::thread::sleep(RETRY_DELAY);
             }
-            upload_to_remote(&sess, &data, file_size, remote_path).ok()
+            match upload_to_remote(&sess, &data, file_size, remote_path) {
+                Ok(_) => Some(()),
+                Err(e) => {
+                    upload_progress.set_message(format!("文件上传失败: {}，正在重试...", e));
+                    None
+                }
+            }
         })
-        .ok_or_else(|| format!("文件上传失败，已达到最大重试次数({}次)", MAX_RETRIES))?;
+        .ok_or_else(|| {
+            upload_progress.finish_with_message("文件上传失败，已达到最大重试次数");
+            format!("文件上传失败，已达到最大重试次数({}次)", MAX_RETRIES)
+        })?;
 
-    println!(
+    upload_progress.finish_with_message(format!(
         "JAR 文件上传成功! {} -> {} (大小: {:.2} MB)",
         local_path,
         remote_path,
         bytes_to_mb(file_size)
-    );
+    ));
 
     // 杀死已存在的进程
     (0..MAX_RETRIES)
@@ -318,7 +377,94 @@ pub fn upload_and_run_jar(
     // 启动JAR包
     start_jar(&sess, remote_path, java_path, env)?;
 
-    println!("{}环境JAR包部署和启动成功: {}", env, remote_path);
+    Ok(())
+}
+
+/// 仅上传JAR文件，不进行进程管理
+pub fn upload_jar_only(
+    server: &str,
+    username: &str,
+    password: &str,
+    local_path: &str,
+    remote_path: &str,
+) -> Result<(), String> {
+    // 读取本地文件
+    let (data, file_size) = read_local_file(local_path)?;
+
+    let sess = (0..MAX_RETRIES)
+        .find_map(|attempt| {
+            if attempt > 0 {
+                println!("尝试重新创建SSH会话 (第{}次重试)...", attempt);
+                std::thread::sleep(RETRY_DELAY);
+            }
+            create_ssh_session(server, username, password).ok()
+        })
+        .ok_or_else(|| format!("创建SSH会话失败，已达到最大重试次数({}次)", MAX_RETRIES))?;
+
+    // 上传文件（带重试机制）
+    let upload_progress = ProgressBar::new_spinner();
+    upload_progress.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.green} {msg}")
+            .unwrap(),
+    );
+
+    (0..MAX_RETRIES)
+        .find_map(|attempt| {
+            if attempt > 0 {
+                upload_progress.set_message(format!("尝试重新上传文件 (第{}次重试)...", attempt));
+                std::thread::sleep(RETRY_DELAY);
+            }
+            match upload_to_remote(&sess, &data, file_size, remote_path) {
+                Ok(_) => Some(()),
+                Err(e) => {
+                    upload_progress.set_message(format!("文件上传失败: {}，正在重试...", e));
+                    None
+                }
+            }
+        })
+        .ok_or_else(|| {
+            upload_progress.finish_with_message("文件上传失败，已达到最大重试次数");
+            format!("文件上传失败，已达到最大重试次数({}次)", MAX_RETRIES)
+        })?;
+
+    upload_progress.finish_with_message(format!(
+        "JAR 文件上传成功! {} -> {} (大小: {:.2} MB)",
+        local_path,
+        remote_path,
+        bytes_to_mb(file_size)
+    ));
+
+    Ok(())
+}
+
+/// 仅上传ZIP文件，不进行解压
+pub fn upload_zip_only(
+    server: &str,
+    username: &str,
+    password: &str,
+    local_path: &str,
+    remote_path: &str,
+) -> Result<(), String> {
+    // 读取本地文件
+    let (data, file_size) = read_local_file(local_path)?;
+
+    // 创建SSH会话
+    let sess = create_ssh_session(server, username, password)?;
+
+    // 构建远程zip路径
+    let remote_zip_path = format!("{}.zip", remote_path);
+
+    // 上传文件
+    upload_to_remote(&sess, &data, file_size, &remote_zip_path)?;
+
+    println!(
+        "ZIP 文件上传成功! {} -> {} (大小: {:.2} MB)",
+        local_path,
+        remote_zip_path,
+        bytes_to_mb(file_size)
+    );
+
     Ok(())
 }
 
@@ -342,6 +488,15 @@ pub fn upload_file(
     // 上传文件
     upload_to_remote(&sess, &data, file_size, &remote_zip_path)?;
 
+    // 解压进度条
+    let unzip_progress = ProgressBar::new_spinner();
+    unzip_progress.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.green} {msg}")
+            .unwrap(),
+    );
+    unzip_progress.set_message("正在解压文件...");
+
     // 解压命令：先删除目标目录，然后解压zip文件
     // 使用-o选项覆盖现有文件，不提示
     let unzip_cmd = format!(
@@ -350,13 +505,146 @@ pub fn upload_file(
     );
 
     // 执行解压命令
-    execute_remote_command(&sess, &unzip_cmd)?;
+    match execute_remote_command(&sess, &unzip_cmd) {
+        Ok(_) => {
+            unzip_progress.finish_with_message(format!(
+                "文件上传并解压成功! {} -> {} (大小: {:.2} MB)",
+                local_path,
+                remote_zip_path,
+                bytes_to_mb(file_size)
+            ));
+        }
+        Err(e) => {
+            unzip_progress.finish_with_message(format!("解压失败: {}", e));
+            return Err(e);
+        }
+    }
 
-    println!(
-        "文件上传成功! {} -> {} (大小: {:.2} MB)",
-        local_path,
-        remote_zip_path,
-        bytes_to_mb(file_size)
-    );
     Ok(())
+}
+
+
+
+
+
+/// 自定义写入器，用于跟踪上传进度
+struct ProgressWriter<'a> {
+    inner: &'a mut dyn Write,
+    progress_bar: ProgressBar,
+    bytes_written: u64,
+    start_time: Instant,
+    last_update_time: Instant,
+    last_bytes_written: u64,
+}
+
+impl<'a> ProgressWriter<'a> {
+    fn new(inner: &'a mut dyn Write, total_size: u64) -> Self {
+        let progress_bar = ProgressBar::new(total_size);
+        progress_bar.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) {msg}")
+                .unwrap()
+                .progress_chars("#>-"),
+        );
+
+        let now = Instant::now();
+        ProgressWriter {
+            inner,
+            progress_bar,
+            bytes_written: 0,
+            start_time: now,
+            last_update_time: now,
+            last_bytes_written: 0,
+        }
+    }
+
+    /// 更新上传速率信息
+    fn update_speed(&mut self) {
+        let now = Instant::now();
+        let elapsed_since_last_update = now.duration_since(self.last_update_time);
+
+        // 每500毫秒更新一次速率显示，避免过于频繁的更新
+        if elapsed_since_last_update.as_millis() >= 500 {
+            let bytes_since_last_update = self.bytes_written - self.last_bytes_written;
+            let elapsed_seconds = elapsed_since_last_update.as_secs_f64();
+
+            // 计算当前速率 (bytes/second)
+            let current_speed = if elapsed_seconds > 0.0 {
+                bytes_since_last_update as f64 / elapsed_seconds
+            } else {
+                0.0
+            };
+
+            // 计算平均速率
+            let total_elapsed = now.duration_since(self.start_time).as_secs_f64();
+            let average_speed = if total_elapsed > 0.0 {
+                self.bytes_written as f64 / total_elapsed
+            } else {
+                0.0
+            };
+
+            // 计算剩余时间
+            let remaining_bytes = self.progress_bar.length().unwrap_or(0) - self.bytes_written;
+            let eta_text = if remaining_bytes > 0 && current_speed > 0.0 {
+                let eta_seconds = remaining_bytes as f64 / current_speed;
+                format_duration(eta_seconds)
+            } else {
+                "未知".to_string()
+            };
+
+            // 格式化速率信息和剩余时间
+            let speed_msg = format!(
+                "当前: {}/s | 平均: {}/s | 剩余时间: {}",
+                format_bytes(current_speed as u64),
+                format_bytes(average_speed as u64),
+                eta_text
+            );
+
+            self.progress_bar.set_message(speed_msg);
+
+            // 更新记录
+            self.last_update_time = now;
+            self.last_bytes_written = self.bytes_written;
+        }
+    }
+}
+
+impl<'a> Write for ProgressWriter<'a> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let result = self.inner.write(buf);
+        if let Ok(size) = result {
+            self.bytes_written += size as u64;
+            self.progress_bar.set_position(self.bytes_written);
+
+            // 更新速率信息
+            self.update_speed();
+        }
+        result
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+impl<'a> Drop for ProgressWriter<'a> {
+    fn drop(&mut self) {
+        // 计算最终的速率信息
+        let now = Instant::now();
+        let total_elapsed = now.duration_since(self.start_time).as_secs_f64();
+        let final_average_speed = if total_elapsed > 0.0 {
+            self.bytes_written as f64 / total_elapsed
+        } else {
+            0.0
+        };
+
+        // 组合最终消息：上传完成 + 最终速率信息
+        let final_message = format!(
+            "上传完成 | 平均速度: {} | 总用时: {:.1}s",
+            format_bytes(final_average_speed as u64),
+            total_elapsed
+        );
+
+        self.progress_bar.finish_with_message(final_message);
+    }
 }

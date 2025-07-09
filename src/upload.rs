@@ -34,6 +34,27 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// 格式化时间为可读格式
+fn format_duration(seconds: f64) -> String {
+    let total_seconds = seconds as i64;
+    
+    if total_seconds < 60 {
+        format!("{}s", total_seconds)
+    } else if total_seconds < 3600 {
+        let minutes = total_seconds / 60;
+        let secs = total_seconds % 60;
+        format!("{}m {}s", minutes, secs)
+    } else if total_seconds < 86400 {
+        let hours = total_seconds / 3600;
+        let minutes = (total_seconds % 3600) / 60;
+        format!("{}h {}m", hours, minutes)
+    } else {
+        let days = total_seconds / 86400;
+        let hours = (total_seconds % 86400) / 3600;
+        format!("{}d {}h", days, hours)
+    }
+}
+
 /// 创建SSH会话
 fn create_ssh_session(server: &str, username: &str, password: &str) -> Result<Session, String> {
     let tcp = TcpStream::connect(server).map_err(|e| format!("ssh通信连接失败: {}", e))?;
@@ -562,11 +583,21 @@ impl<'a> ProgressWriter<'a> {
                 0.0
             };
 
-            // 格式化速率信息
+            // 计算剩余时间
+            let remaining_bytes = self.progress_bar.length().unwrap_or(0) - self.bytes_written;
+            let eta_text = if remaining_bytes > 0 && current_speed > 0.0 {
+                let eta_seconds = remaining_bytes as f64 / current_speed;
+                format_duration(eta_seconds)
+            } else {
+                "未知".to_string()
+            };
+
+            // 格式化速率信息和剩余时间
             let speed_msg = format!(
-                "当前: {}/s | 平均: {}/s",
+                "当前: {}/s | 平均: {}/s | 剩余时间: {}",
                 format_bytes(current_speed as u64),
-                format_bytes(average_speed as u64)
+                format_bytes(average_speed as u64),
+                eta_text
             );
 
             self.progress_bar.set_message(speed_msg);

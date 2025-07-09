@@ -17,7 +17,7 @@ use serde_json::Value;
 
 fn main() {
     let matches = Command::new("deploy-tool")
-        .version("1.3")
+        .version("1.4")
         .author("士钰 <zhoushiyu92@gmail.com>")
         .about("一键部署Java和Vue项目,支持多环境部署,支持多模块部署")
         .arg(

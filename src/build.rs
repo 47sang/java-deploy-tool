@@ -84,6 +84,17 @@ pub fn build_vue_project(project_dir: &str,scripts: &str) -> Result<(), String> 
     }
     .map_err(|e| format!("执行npm命令失败: {}", e))?;
 
+    // 读取并显示标准输出
+    if let Some(stdout) = child.stdout.take() {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            if let Ok(line) = line {
+                println!("{}", line);
+            }
+        }
+    }
+
+    // 等待命令执行完成
     let status = child.wait()
         .map_err(|e| format!("等待命令完成失败: {}", e))?;
 

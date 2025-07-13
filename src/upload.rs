@@ -4,7 +4,7 @@ use std::net::TcpStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
 use std::fs;
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressStyle, MultiProgress};
 
 /// 创建SSH会话最大重试次数
 const MAX_RETRIES: u32 = 3;
@@ -98,6 +98,7 @@ fn upload_to_remote(
     data: &[u8],
     file_size: u64,
     remote_path: &str,
+    multi_progress: Option<&MultiProgress>,
 ) -> Result<(), String> {
 
     // 检查远程文件路径是否存在
@@ -127,7 +128,7 @@ fn upload_to_remote(
 
     // 使用进度条写入器
     {
-        let mut progress_writer = ProgressWriter::new(&mut remote_file, file_size);
+        let mut progress_writer = ProgressWriter::new(&mut remote_file, file_size, multi_progress);
         progress_writer
             .write_all(data)
             .map_err(|e| format!("写入远程文件失败: {}", e))?;
@@ -315,21 +316,18 @@ pub fn upload_and_run_jar(
     remote_path: &str,
     java_path: &str,
     env: &str,
+    multi_progress: Option<&MultiProgress>,
 ) -> Result<(), String> {
     // 读取本地文件
     let (data, file_size) = read_local_file(local_path)?;
 
-    let sess = (0..MAX_RETRIES)
-        .find_map(|attempt| {
-            if attempt > 0 {
-                println!("尝试重新创建SSH会话 (第{}次重试)...", attempt);
-                std::thread::sleep(RETRY_DELAY);
-            }
-            create_ssh_session(server, username, password).ok()
-        })
-        .ok_or_else(|| format!("创建SSH会话失败，已达到最大重试次数({}次)", MAX_RETRIES))?;
+    // 创建SSH会话
+    let sess = create_ssh_session(server, username, password)?;
 
-    // 上传文件（带重试机制）
+    // 杀死旧进程
+    kill_process(&sess, remote_path, env)?;
+
+    // 上传文件
     let upload_progress = ProgressBar::new_spinner();
     upload_progress.set_style(
         ProgressStyle::default_spinner()
@@ -343,7 +341,7 @@ pub fn upload_and_run_jar(
                 upload_progress.set_message(format!("尝试重新上传文件 (第{}次重试)...", attempt));
                 std::thread::sleep(RETRY_DELAY);
             }
-            match upload_to_remote(&sess, &data, file_size, remote_path) {
+            match upload_to_remote(&sess, &data, file_size, remote_path, multi_progress) {
                 Ok(_) => Some(()),
                 Err(e) => {
                     upload_progress.set_message(format!("文件上传失败: {}，正在重试...", e));
@@ -363,17 +361,6 @@ pub fn upload_and_run_jar(
         bytes_to_mb(file_size)
     ));
 
-    // 杀死已存在的进程
-    (0..MAX_RETRIES)
-        .find_map(|attempt| {
-            if attempt > 0 {
-                println!("尝试重新杀死进程 (第{}次重试)...", attempt);
-                std::thread::sleep(RETRY_DELAY);
-            }
-            kill_process(&sess, remote_path, &env).ok()
-        })
-        .ok_or_else(|| format!("进程杀死失败，已达到最大重试次数({}次)", MAX_RETRIES))?;
-
     // 启动JAR包
     start_jar(&sess, remote_path, java_path, env)?;
 
@@ -387,21 +374,15 @@ pub fn upload_jar_only(
     password: &str,
     local_path: &str,
     remote_path: &str,
+    multi_progress: Option<&MultiProgress>,
 ) -> Result<(), String> {
     // 读取本地文件
     let (data, file_size) = read_local_file(local_path)?;
 
-    let sess = (0..MAX_RETRIES)
-        .find_map(|attempt| {
-            if attempt > 0 {
-                println!("尝试重新创建SSH会话 (第{}次重试)...", attempt);
-                std::thread::sleep(RETRY_DELAY);
-            }
-            create_ssh_session(server, username, password).ok()
-        })
-        .ok_or_else(|| format!("创建SSH会话失败，已达到最大重试次数({}次)", MAX_RETRIES))?;
+    // 创建SSH会话
+    let sess = create_ssh_session(server, username, password)?;
 
-    // 上传文件（带重试机制）
+    // 上传文件
     let upload_progress = ProgressBar::new_spinner();
     upload_progress.set_style(
         ProgressStyle::default_spinner()
@@ -415,7 +396,7 @@ pub fn upload_jar_only(
                 upload_progress.set_message(format!("尝试重新上传文件 (第{}次重试)...", attempt));
                 std::thread::sleep(RETRY_DELAY);
             }
-            match upload_to_remote(&sess, &data, file_size, remote_path) {
+            match upload_to_remote(&sess, &data, file_size, remote_path, multi_progress) {
                 Ok(_) => Some(()),
                 Err(e) => {
                     upload_progress.set_message(format!("文件上传失败: {}，正在重试...", e));
@@ -445,6 +426,7 @@ pub fn upload_zip_only(
     password: &str,
     local_path: &str,
     remote_path: &str,
+    multi_progress: Option<&MultiProgress>,
 ) -> Result<(), String> {
     // 读取本地文件
     let (data, file_size) = read_local_file(local_path)?;
@@ -452,11 +434,9 @@ pub fn upload_zip_only(
     // 创建SSH会话
     let sess = create_ssh_session(server, username, password)?;
 
-    // 构建远程zip路径
-    let remote_zip_path = format!("{}.zip", remote_path);
-
     // 上传文件
-    upload_to_remote(&sess, &data, file_size, &remote_zip_path)?;
+    let remote_zip_path = remote_path.replace(".zip", "");
+    upload_to_remote(&sess, &data, file_size, &remote_zip_path, multi_progress)?;
 
     println!(
         "ZIP 文件上传成功! {} -> {} (大小: {:.2} MB)",
@@ -475,6 +455,7 @@ pub fn upload_file(
     password: &str,
     local_path: &str,
     remote_path: &str,
+    multi_progress: Option<&MultiProgress>,
 ) -> Result<(), String> {
     // 读取本地文件
     let (data, file_size) = read_local_file(local_path)?;
@@ -482,11 +463,9 @@ pub fn upload_file(
     // 创建SSH会话
     let sess = create_ssh_session(server, username, password)?;
 
-    // 构建远程zip路径
-    let remote_zip_path = format!("{}.zip", remote_path);
-
     // 上传文件
-    upload_to_remote(&sess, &data, file_size, &remote_zip_path)?;
+    let remote_zip_path = remote_path.replace(".zip", "");
+    upload_to_remote(&sess, &data, file_size, &remote_zip_path, multi_progress)?;
 
     // 解压进度条
     let unzip_progress = ProgressBar::new_spinner();
@@ -538,8 +517,13 @@ struct ProgressWriter<'a> {
 }
 
 impl<'a> ProgressWriter<'a> {
-    fn new(inner: &'a mut dyn Write, total_size: u64) -> Self {
-        let progress_bar = ProgressBar::new(total_size);
+    fn new(inner: &'a mut dyn Write, total_size: u64, multi_progress: Option<&MultiProgress>) -> Self {
+        let progress_bar = if let Some(mp) = multi_progress {
+            mp.add(ProgressBar::new(total_size))
+        } else {
+            ProgressBar::new(total_size)
+        };
+        
         progress_bar.set_style(
             ProgressStyle::default_bar()
                 .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) {msg}")

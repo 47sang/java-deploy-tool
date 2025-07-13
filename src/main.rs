@@ -10,6 +10,7 @@ use std::fs::File;
 use std::thread;
 use std::time::{Duration, Instant};
 use upload::{upload_file, upload_and_run_jar};
+use indicatif::MultiProgress;
 
 use zip::CompressionMethod;
 use zip::{write::FileOptions, ZipWriter};
@@ -179,6 +180,7 @@ fn deploy_java_project(
 
     // 为每个环境创建部署任务
     let mut handles = vec![];
+    let multi_progress = MultiProgress::new();
 
     for env in environments {
         let env = env.to_string();
@@ -217,7 +219,7 @@ fn deploy_java_project(
                             jar_name
                         );
 
-                        spawn_deploy_thread(jar_name, jar_path, config.clone(), env, upload_only, &mut handles);
+                        spawn_deploy_thread(jar_name, jar_path, config.clone(), env, upload_only, &mut handles, &multi_progress);
                     }
                 }
             },
@@ -235,7 +237,7 @@ fn deploy_java_project(
                 // 单模块项目，获取编译产物路径
                 let jar_path = format!("{}/target/{}", project_dir, jar_name);
                 
-                spawn_deploy_thread(jar_name, jar_path, config.clone(), env, upload_only, &mut handles);
+                spawn_deploy_thread(jar_name, jar_path, config.clone(), env, upload_only, &mut handles, &multi_progress);
             },
             _ => {
                 eprintln!("配置文件中jar_files格式错误，必须是字符串或字符串数组");
@@ -259,9 +261,11 @@ fn spawn_deploy_thread(
     config: DeployConfig,
     env: String,
     upload_only: bool,
-    handles: &mut Vec<thread::JoinHandle<()>>
+    handles: &mut Vec<thread::JoinHandle<()>>,
+    multi_progress: &MultiProgress,
 ) {
     let jar_name = jar_name.to_string();
+    let multi_progress = multi_progress.clone();
     
     let handle = thread::spawn(move || {
         let remote_path = format!("{}/{}", config.remote_base_path, jar_name);
@@ -284,6 +288,7 @@ fn spawn_deploy_thread(
                 &config.password,
                 &jar_path,
                 &remote_path,
+                Some(&multi_progress),
             ) {
                 eprintln!("上传失败 {} ({}环境): {}", jar_name, env, e);
                 return;
@@ -300,6 +305,7 @@ fn spawn_deploy_thread(
                 &remote_path,
                 &config.java_path,
                 &env,
+                Some(&multi_progress),
             ) {
                 eprintln!("部署失败 {} ({}环境): {}", jar_name, env, e);
                 return;
@@ -339,6 +345,7 @@ fn deploy_vue_project(
 ) -> Result<(), String> {
     // 为每个环境创建部署任务
     let mut handles = vec![];
+    let multi_progress = MultiProgress::new();
 
     for env in environments {
         let env = env.to_string();
@@ -353,6 +360,7 @@ fn deploy_vue_project(
             }
         };
 
+        let multi_progress = multi_progress.clone();
         let handle = thread::spawn(move || {
             // 构建Vue项目
             build_vue_project(&project_dir, &config.scripts).expect("构建Vue项目失败");
@@ -386,6 +394,7 @@ fn deploy_vue_project(
                     &config.password,
                     &zip_path,
                     &remote_path,
+                    Some(&multi_progress),
                 ) {
                     eprintln!("上传失败 {} ({}环境): {}", config.output_dir, env, e);
                     return;
@@ -399,6 +408,7 @@ fn deploy_vue_project(
                     &config.password,
                     &zip_path,
                     &remote_path,
+                    Some(&multi_progress),
                 ) {
                     eprintln!("上传失败 {} ({}环境): {}", config.output_dir, env, e);
                     return;

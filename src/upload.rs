@@ -477,10 +477,10 @@ pub fn upload_file(
     unzip_progress.set_message("正在解压文件...");
 
     // 解压命令：先删除目标目录，然后解压zip文件
-    // 使用-o选项覆盖现有文件，不提示
+    // 使用-o选项覆盖现有文件，不提示，-d参数指定解压目标目录
     let unzip_cmd = format!(
-        "rm -rf {} && mkdir -p {} && cd {} && /usr/bin/unzip -o {}",
-        remote_path, remote_path, remote_path, remote_zip_path
+        "rm -rf {} && mkdir -p {} && /usr/bin/unzip -o {} -d {}",
+        remote_path, remote_path, remote_zip_path, remote_path
     );
 
     // 执行解压命令

@@ -324,10 +324,7 @@ pub fn upload_and_run_jar(
     // 创建SSH会话
     let sess = create_ssh_session(server, username, password)?;
 
-    // 杀死旧进程
-    kill_process(&sess, remote_path, env)?;
-
-    // 上传文件
+    // 上传文件（先上传，避免服务中断）
     let upload_progress = ProgressBar::new_spinner();
     upload_progress.set_style(
         ProgressStyle::default_spinner()
@@ -360,6 +357,9 @@ pub fn upload_and_run_jar(
         remote_path,
         bytes_to_mb(file_size)
     ));
+
+    // 在文件上传成功后杀死旧进程，最大化服务可用性
+    kill_process(&sess, remote_path, env)?;
 
     // 启动JAR包
     start_jar(&sess, remote_path, java_path, env)?;

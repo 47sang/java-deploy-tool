@@ -100,33 +100,13 @@ fn upload_to_remote(
     remote_path: &str,
     multi_progress: Option<&MultiProgress>,
 ) -> Result<(), String> {
-
-    // 检查远程文件路径是否存在
-    let check_path_cmd = format!("test -e {} && echo 'exists' || echo 'not exists'", remote_path);
-    match execute_remote_command(sess, &check_path_cmd) {
-        Ok(output) => {
-            if output.trim() == "exists" {
-                println!("远程文件已存在: {}", remote_path);
-                // 删除已存在的文件
-                let remove_cmd = format!("mv {} {}.bak", remote_path,remote_path);
-                execute_remote_command(sess, &remove_cmd)
-                    .map_err(|e| format!("标记远程文件为bak备份文件失败: {}", e))?;
-                println!("已标记备份存在的文件,{}.bak",remote_path);
-            }
-            if output.trim() == "not exists"  {
-                print!("远程文件不存在，或者路径错误，请检查配置文件remote_base_path属性是否正确: {}", remote_path)
-            }
-        }
-        Err(e) => {
-            return Err(format!("检查远程文件路径失败: {}", e));
-        }
-    }
-
+    // 1. 先上传文件到远程临时路径
+    let temp_remote_path = format!("{}.tmp", remote_path);
     let mut remote_file = sess
-        .scp_send(Path::new(remote_path), 0o644, file_size, None)
+        .scp_send(Path::new(&temp_remote_path), 0o644, file_size, None)
         .map_err(|e| format!("创建远程文件失败: {}", e))?;
 
-    // 使用进度条写入器
+    // 使用进度条写入器上传文件
     {
         let mut progress_writer = ProgressWriter::new(&mut remote_file, file_size, multi_progress);
         progress_writer
@@ -146,6 +126,37 @@ fn upload_to_remote(
     remote_file
         .wait_close()
         .map_err(|e| format!("等待远程文件关闭失败: {}", e))?;
+
+    println!("文件上传完成: {}", temp_remote_path);
+
+    // 2. 上传完成后，检查远程文件路径是否存在
+    let check_path_cmd = format!("test -e {} && echo 'exists' || echo 'not_exists'", remote_path);
+    match execute_remote_command(sess, &check_path_cmd) {
+        Ok(output) => {
+            if output.trim() == "exists" {
+                println!("远程文件已存在: {}", remote_path);
+                // 先删除已存在的备份，再创建新备份
+                let backup_path = format!("{}.bak", remote_path);
+                let remove_backup_cmd = format!("rm -rf {} && mv {} {}", backup_path, remote_path, backup_path);
+                execute_remote_command(sess, &remove_backup_cmd)
+                    .map_err(|e| format!("备份远程文件失败: {}", e))?;
+                println!("已创建备份: {}.bak", remote_path);
+            }
+            if output.trim() == "not_exists" {
+                println!("远程文件不存在，将创建新文件: {}", remote_path);
+            }
+        }
+        Err(e) => {
+            return Err(format!("检查远程文件路径失败: {}", e));
+        }
+    }
+
+    // 3. 将临时文件移动到最终位置
+    let move_cmd = format!("mv {} {}", temp_remote_path, remote_path);
+    execute_remote_command(sess, &move_cmd)
+        .map_err(|e| format!("移动文件到最终位置失败: {}", e))?;
+    
+    println!("文件已移动到最终位置: {}", remote_path);
 
     Ok(())
 }
@@ -463,8 +474,21 @@ pub fn upload_file(
     // 创建SSH会话
     let sess = create_ssh_session(server, username, password)?;
 
-    // 上传文件
-    let remote_zip_path = remote_path.replace(".zip", "");
+    // 确保远程ZIP路径包含.zip后缀
+    let remote_zip_path = if remote_path.ends_with(".zip") {
+        remote_path.to_string()
+    } else {
+        format!("{}.zip", remote_path)
+    };
+    
+    // 获取解压目标目录（去掉.zip后缀）
+    let extract_dir = if remote_path.ends_with(".zip") {
+        &remote_path[..remote_path.len() - 4]
+    } else {
+        remote_path
+    };
+
+    // 上传ZIP文件到远程服务器
     upload_to_remote(&sess, &data, file_size, &remote_zip_path, multi_progress)?;
 
     // 解压进度条
@@ -476,11 +500,14 @@ pub fn upload_file(
     );
     unzip_progress.set_message("正在解压文件...");
 
-    // 解压命令：先删除目标目录，然后解压zip文件
-    // 使用-o选项覆盖现有文件，不提示，-d参数指定解压目标目录
+    // 修复后的解压命令：
+    // 1. 先删除旧项目目录（如果存在）
+    // 2. 创建新的空目录
+    // 3. 解压ZIP文件到新目录
+    // 4. 保留ZIP文件作为备份（可选删除）
     let unzip_cmd = format!(
-        "rm -rf {} && mkdir -p {} && /usr/bin/unzip -o {} -d {}",
-        remote_path, remote_path, remote_zip_path, remote_path
+        "rm -rf {} && mkdir -p {} && /usr/bin/unzip -o {} -d {} && echo '解压完成'",
+        extract_dir, extract_dir, remote_zip_path, extract_dir
     );
 
     // 执行解压命令
@@ -489,7 +516,7 @@ pub fn upload_file(
             unzip_progress.finish_with_message(format!(
                 "文件上传并解压成功! {} -> {} (大小: {:.2} MB)",
                 local_path,
-                remote_zip_path,
+                extract_dir,
                 bytes_to_mb(file_size)
             ));
         }

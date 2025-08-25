@@ -7,7 +7,7 @@
 ## 编译
 
 ```bash
-cargo build --release
+`cargo build --release`
 ```
 
 ## windows交叉编译
@@ -21,6 +21,18 @@ cargo build --release --target x86_64-pc-windows-msvc
 ```bash
 docker pull rust:latest
 docker run --rm -v /c/Users/zhou-/Desktop/temp/rust/java-deploy-tool:/opt -w /opt rust:latest bash -c "rustup target add x86_64-unknown-linux-gnu && cargo build --release --target x86_64-unknown-linux-gnu"
+```
+
+## mac编译后放到命令行执行
+
+版本管理：每次重新编译后，记得更新系统中的版本：
+```bash
+sudo cp target/release/deploy-tool /usr/local/bin/
+```
+
+卸载方法：如需卸载，只需删除文件：
+```bash
+sudo rm /usr/local/bin/deploy-tool
 ```
 
 ## 创建配置文件

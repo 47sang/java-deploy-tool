@@ -13,12 +13,29 @@ pub fn build_java_project(project_dir: &str) -> Result<(), String> {
     
     // 根据操作系统类型选择适当的命令
     let mut child = if is_windows {
-        Command::new("cmd")
+        // 在Windows下先尝试mvnd命令
+        match Command::new("cmd")
             .args(["/c", "mvnd", "clean", "package", "-DskipTests"])
             .current_dir(project_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .spawn()
+            .spawn() {
+            Ok(child) => {
+                println!("使用mvnd命令执行构建...");
+                child
+            },
+            Err(_) => {
+                // mvnd命令失败，回退到mvn命令
+                println!("mvnd命令未找到，回退使用mvn命令...");
+                Command::new("cmd")
+                    .args(["/c", "mvn", "clean", "package", "-DskipTests"])
+                    .current_dir(project_dir)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .map_err(|e| format!("执行mvn命令失败: {}", e))?
+            }
+        }
     } else {
         Command::new("mvn")
             .args(["clean", "package", "-DskipTests"])
@@ -26,8 +43,8 @@ pub fn build_java_project(project_dir: &str) -> Result<(), String> {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-    }
-    .map_err(|e| format!("执行mvn命令失败: {}", e))?;
+            .map_err(|e| format!("执行mvn命令失败: {}", e))?
+    };
 
     // 读取并显示标准输出
     if let Some(stdout) = child.stdout.take() {

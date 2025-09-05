@@ -11,12 +11,16 @@ pub fn build_java_project(project_dir: &str) -> Result<(), String> {
     // 检测操作系统类型
     let is_windows = cfg!(target_os = "windows");
     
+    // 检测并设置合适的JDK版本
+    let java_home = detect_java_version(project_dir)?;
+    
     // 根据操作系统类型选择适当的命令
     let mut child = if is_windows {
         // 在Windows下先尝试mvnd命令
         match Command::new("cmd")
             .args(["/c", "mvnd", "clean", "package", "-DskipTests"])
             .current_dir(project_dir)
+            .env("JAVA_HOME", &java_home)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn() {
@@ -30,6 +34,7 @@ pub fn build_java_project(project_dir: &str) -> Result<(), String> {
                 Command::new("cmd")
                     .args(["/c", "mvn", "clean", "package", "-DskipTests"])
                     .current_dir(project_dir)
+                    .env("JAVA_HOME", &java_home)
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
                     .spawn()
@@ -40,6 +45,7 @@ pub fn build_java_project(project_dir: &str) -> Result<(), String> {
         Command::new("mvn")
             .args(["clean", "package", "-DskipTests"])
             .current_dir(project_dir)
+            .env("JAVA_HOME", &java_home)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -181,5 +187,116 @@ pub fn zip_dir(zip: &mut ZipWriter<File>, src_dir: &str, options: FileOptions) -
   }
   
   Ok(())
+}
+
+/// 检测项目需要的Java版本并返回对应的JAVA_HOME路径
+fn detect_java_version(project_dir: &str) -> Result<String, String> {
+    use std::fs;
+    
+    // 读取pom.xml文件
+    let pom_path = format!("{}/pom.xml", project_dir);
+    let pom_content = fs::read_to_string(&pom_path)
+        .map_err(|_| "无法读取pom.xml文件".to_string())?;
+    
+    // 检查Java版本配置
+    let java_version = if pom_content.contains("<java.version>8</java.version>") 
+        || pom_content.contains("<maven.compiler.source>8</maven.compiler.source>")
+        || pom_content.contains("<maven.compiler.target>8</maven.compiler.target>") {
+        "8"
+    } else if pom_content.contains("<java.version>11</java.version>") 
+        || pom_content.contains("<maven.compiler.source>11</maven.compiler.source>")
+        || pom_content.contains("<maven.compiler.target>11</maven.compiler.target>") {
+        "11"
+    } else if pom_content.contains("<java.version>17</java.version>") 
+        || pom_content.contains("<maven.compiler.source>17</maven.compiler.source>")
+        || pom_content.contains("<maven.compiler.target>17</maven.compiler.target>") {
+        "17"
+    } else if pom_content.contains("<java.version>21</java.version>") 
+        || pom_content.contains("<maven.compiler.source>21</maven.compiler.source>")
+        || pom_content.contains("<maven.compiler.target>21</maven.compiler.target>") {
+        "21"
+    } else {
+        // 默认使用Java 8
+        println!("⚠️  未检测到明确的Java版本配置，默认使用Java 8");
+        "8"
+    };
+    
+    // 根据操作系统和Java版本返回对应的JAVA_HOME路径
+    let java_home = if cfg!(target_os = "macos") {
+        match java_version {
+            "8" => {
+                // 检查是否安装了JDK 8
+                let jdk8_path = "/Library/Java/JavaVirtualMachines/zulu-8.jdk/Contents/Home";
+                if Path::new(jdk8_path).exists() {
+                    println!("🔧 检测到项目需要Java {}，使用: {}", java_version, jdk8_path);
+                    jdk8_path.to_string()
+                } else {
+                    // 尝试其他可能的JDK 8路径
+                    let alt_paths = vec![
+                        "/Library/Java/JavaVirtualMachines/adoptopenjdk-8.jdk/Contents/Home",
+                        "/Library/Java/JavaVirtualMachines/temurin-8.jdk/Contents/Home",
+                        "/Library/Java/JavaVirtualMachines/jdk1.8.0_*.jdk/Contents/Home",
+                    ];
+                    
+                    for path in alt_paths {
+                        if Path::new(path).exists() {
+                            println!("🔧 检测到项目需要Java {}，使用: {}", java_version, path);
+                            return Ok(path.to_string());
+                        }
+                    }
+                    
+                    return Err(format!("❌ 项目需要Java {}，但系统中未找到对应的JDK安装。请安装JDK 8", java_version));
+                }
+            },
+            "11" => {
+                let jdk11_path = "/Library/Java/JavaVirtualMachines/zulu-11.jdk/Contents/Home";
+                if Path::new(jdk11_path).exists() {
+                    println!("🔧 检测到项目需要Java {}，使用: {}", java_version, jdk11_path);
+                    jdk11_path.to_string()
+                } else {
+                    return Err(format!("❌ 项目需要Java {}，但系统中未找到对应的JDK安装", java_version));
+                }
+            },
+            "17" => {
+                let jdk17_path = "/Library/Java/JavaVirtualMachines/zulu-17.jdk/Contents/Home";
+                if Path::new(jdk17_path).exists() {
+                    println!("🔧 检测到项目需要Java {}，使用: {}", java_version, jdk17_path);
+                    jdk17_path.to_string()
+                } else {
+                    return Err(format!("❌ 项目需要Java {}，但系统中未找到对应的JDK安装", java_version));
+                }
+            },
+            "21" => {
+                let jdk21_path = "/Library/Java/JavaVirtualMachines/zulu-21.jdk/Contents/Home";
+                if Path::new(jdk21_path).exists() {
+                    println!("🔧 检测到项目需要Java {}，使用: {}", java_version, jdk21_path);
+                    jdk21_path.to_string()
+                } else {
+                    return Err(format!("❌ 项目需要Java {}，但系统中未找到对应的JDK安装", java_version));
+                }
+            },
+            _ => return Err(format!("❌ 不支持的Java版本: {}", java_version))
+        }
+    } else if cfg!(target_os = "windows") {
+        // Windows路径处理
+        match java_version {
+            "8" => "C:\\Program Files\\Java\\jdk1.8.0_*".to_string(),
+            "11" => "C:\\Program Files\\Java\\jdk-11".to_string(),
+            "17" => "C:\\Program Files\\Java\\jdk-17".to_string(),
+            "21" => "C:\\Program Files\\Java\\jdk-21".to_string(),
+            _ => return Err(format!("❌ 不支持的Java版本: {}", java_version))
+        }
+    } else {
+        // Linux路径处理
+        match java_version {
+            "8" => "/usr/lib/jvm/java-8-openjdk".to_string(),
+            "11" => "/usr/lib/jvm/java-11-openjdk".to_string(),
+            "17" => "/usr/lib/jvm/java-17-openjdk".to_string(),
+            "21" => "/usr/lib/jvm/java-21-openjdk".to_string(),
+            _ => return Err(format!("❌ 不支持的Java版本: {}", java_version))
+        }
+    };
+    
+    Ok(java_home)
 }
 

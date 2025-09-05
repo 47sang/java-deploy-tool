@@ -7,7 +7,7 @@
 ## 编译
 
 ```bash
-`cargo build --release`
+cargo build --release
 ```
 
 ## windows交叉编译

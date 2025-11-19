@@ -14,7 +14,7 @@ cargo build --release
 ```bash
 brew install mingw-w64
 rustup target add x86_64-pc-windows-gnu
-cargo build --release --target x86_64-pc-windows-msvc
+cargo build --release --target x86_64-pc-windows-gnu
 ```
 
 ## 交叉编译linux程序产物

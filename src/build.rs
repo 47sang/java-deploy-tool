@@ -1,19 +1,19 @@
-use std::process::{Command, Stdio};
-use std::io::{BufRead, BufReader};
+use std::fs::File;
 use std::io::prelude::*;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
+use std::process::{Command, Stdio};
 use walkdir::WalkDir;
 use zip::{write::FileOptions, ZipWriter};
-use std::fs::File;
 
 /// 打包 Java 项目
 pub fn build_java_project(project_dir: &str) -> Result<(), String> {
     // 检测操作系统类型
     let is_windows = cfg!(target_os = "windows");
-    
+
     // 检测并设置合适的JDK版本
     let java_home = detect_java_version(project_dir)?;
-    
+
     // 根据操作系统类型选择适当的命令
     let mut child = if is_windows {
         // 在Windows下先尝试mvnd命令
@@ -23,11 +23,12 @@ pub fn build_java_project(project_dir: &str) -> Result<(), String> {
             .env("JAVA_HOME", &java_home)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .spawn() {
+            .spawn()
+        {
             Ok(child) => {
                 println!("使用mvnd命令执行构建...");
                 child
-            },
+            }
             Err(_) => {
                 // mvnd命令失败，回退到mvn命令
                 println!("mvnd命令未找到，回退使用mvn命令...");
@@ -63,7 +64,8 @@ pub fn build_java_project(project_dir: &str) -> Result<(), String> {
     }
 
     // 等待命令执行完成
-    let status = child.wait()
+    let status = child
+        .wait()
         .map_err(|e| format!("等待命令完成失败: {}", e))?;
 
     if status.success() {
@@ -73,10 +75,11 @@ pub fn build_java_project(project_dir: &str) -> Result<(), String> {
         // 读取错误输出
         if let Some(stderr) = child.stderr.take() {
             let reader = BufReader::new(stderr);
-            let error = reader.lines()
+            let error = reader
+                .lines()
                 .filter_map(|line| line.ok())
                 .collect::<Vec<String>>()
-                .join("\n");            
+                .join("\n");
             Err(format!("构建失败:请检查mvn是否配置在环境变量中\n{}\n建议用 'mvn clean package -DskipTests -e' 或 '-X' 获取详细日志", error))
         } else {
             Err("构建失败，无法获取错误信息".to_string())
@@ -85,10 +88,10 @@ pub fn build_java_project(project_dir: &str) -> Result<(), String> {
 }
 
 /// 打包 Vue 项目
-pub fn build_vue_project(project_dir: &str,scripts: &str) -> Result<(), String> {
+pub fn build_vue_project(project_dir: &str, scripts: &str) -> Result<(), String> {
     // 检测操作系统类型
     let is_windows = cfg!(target_os = "windows");
-    
+
     // 根据操作系统类型选择适当的命令
     let mut child = if is_windows {
         Command::new("cmd")
@@ -118,17 +121,19 @@ pub fn build_vue_project(project_dir: &str,scripts: &str) -> Result<(), String> 
     }
 
     // 等待命令执行完成
-    let status = child.wait()
+    let status = child
+        .wait()
         .map_err(|e| format!("等待命令完成失败: {}", e))?;
 
     if status.success() {
-        println!("{}环境下的Vue项目构建成功!",scripts);
+        println!("{}环境下的Vue项目构建成功!", scripts);
         Ok(())
     } else {
         // 读取错误输出
         if let Some(stderr) = child.stderr.take() {
             let reader = BufReader::new(stderr);
-            let error = reader.lines()
+            let error = reader
+                .lines()
                 .filter_map(|line| line.ok())
                 .collect::<Vec<String>>()
                 .join("\n");
@@ -139,88 +144,97 @@ pub fn build_vue_project(project_dir: &str,scripts: &str) -> Result<(), String> 
     }
 }
 
-
 // 将目录打包成zip文件
-pub fn zip_dir(zip: &mut ZipWriter<File>, src_dir: &str, options: FileOptions) -> Result<(), String> {
-  let src_path = Path::new(src_dir);
-  
-  // 确保源目录存在
-  if !src_path.exists() || !src_path.is_dir() {
-      return Err(format!("源目录不存在或不是一个目录: {}", src_dir));
-  }
-  
-  let walkdir = WalkDir::new(src_dir);
-  
-  for entry in walkdir.into_iter().filter_map(Result::ok) {
-      let path = entry.path();
-      
-      // 跳过源目录本身
-      if path == src_path {
-          continue;
-      }
-      
-      // 计算相对路径
-      let rel_path = path.strip_prefix(src_path).map_err(|e| e.to_string())?;
-      
-      // 直接使用相对路径，不添加顶级目录
-      let zip_path_str = rel_path.to_str().ok_or("路径转换失败")?;
-      
-      // 替换Windows路径分隔符为ZIP标准的/
-      let zip_path_str = zip_path_str.replace('\\', "/");
-      
-      if path.is_file() {
-          zip.start_file(&zip_path_str, options).map_err(|e| e.to_string())?;
-          let mut f = File::open(path).map_err(|e| e.to_string())?;
-          let mut buffer = Vec::new();
-          f.read_to_end(&mut buffer).map_err(|e| e.to_string())?;
-          zip.write_all(&buffer).map_err(|e| e.to_string())?;
-      } else if path.is_dir() {
-          // 确保目录路径以/结尾
-          let dir_path = if zip_path_str.ends_with('/') { 
-              zip_path_str 
-          } else { 
-              format!("{}/", zip_path_str) 
-          };
-          
-          zip.add_directory(&dir_path, options).map_err(|e| e.to_string())?;
-      }
-  }
-  
-  Ok(())
+pub fn zip_dir(
+    zip: &mut ZipWriter<File>,
+    src_dir: &str,
+    options: FileOptions,
+) -> Result<(), String> {
+    let src_path = Path::new(src_dir);
+
+    // 确保源目录存在
+    if !src_path.exists() || !src_path.is_dir() {
+        return Err(format!("源目录不存在或不是一个目录: {}", src_dir));
+    }
+
+    let walkdir = WalkDir::new(src_dir);
+
+    for entry in walkdir.into_iter().filter_map(Result::ok) {
+        let path = entry.path();
+
+        // 跳过源目录本身
+        if path == src_path {
+            continue;
+        }
+
+        // 计算相对路径
+        let rel_path = path.strip_prefix(src_path).map_err(|e| e.to_string())?;
+
+        // 直接使用相对路径，不添加顶级目录
+        let zip_path_str = rel_path.to_str().ok_or("路径转换失败")?;
+
+        // 替换Windows路径分隔符为ZIP标准的/
+        let zip_path_str = zip_path_str.replace('\\', "/");
+
+        if path.is_file() {
+            zip.start_file(&zip_path_str, options)
+                .map_err(|e| e.to_string())?;
+            let mut f = File::open(path).map_err(|e| e.to_string())?;
+            let mut buffer = Vec::new();
+            f.read_to_end(&mut buffer).map_err(|e| e.to_string())?;
+            zip.write_all(&buffer).map_err(|e| e.to_string())?;
+        } else if path.is_dir() {
+            // 确保目录路径以/结尾
+            let dir_path = if zip_path_str.ends_with('/') {
+                zip_path_str
+            } else {
+                format!("{}/", zip_path_str)
+            };
+
+            zip.add_directory(&dir_path, options)
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
+    Ok(())
 }
 
 /// 检测项目需要的Java版本并返回对应的JAVA_HOME路径
 fn detect_java_version(project_dir: &str) -> Result<String, String> {
     use std::fs;
-    
+
     // 读取pom.xml文件
     let pom_path = format!("{}/pom.xml", project_dir);
-    let pom_content = fs::read_to_string(&pom_path)
-        .map_err(|_| "无法读取pom.xml文件".to_string())?;
-    
+    let pom_content =
+        fs::read_to_string(&pom_path).map_err(|_| "无法读取pom.xml文件".to_string())?;
+
     // 检查Java版本配置
-    let java_version = if pom_content.contains("<java.version>8</java.version>") 
+    let java_version = if pom_content.contains("<java.version>8</java.version>")
         || pom_content.contains("<maven.compiler.source>8</maven.compiler.source>")
-        || pom_content.contains("<maven.compiler.target>8</maven.compiler.target>") {
+        || pom_content.contains("<maven.compiler.target>8</maven.compiler.target>")
+    {
         "8"
-    } else if pom_content.contains("<java.version>11</java.version>") 
+    } else if pom_content.contains("<java.version>11</java.version>")
         || pom_content.contains("<maven.compiler.source>11</maven.compiler.source>")
-        || pom_content.contains("<maven.compiler.target>11</maven.compiler.target>") {
+        || pom_content.contains("<maven.compiler.target>11</maven.compiler.target>")
+    {
         "11"
-    } else if pom_content.contains("<java.version>17</java.version>") 
+    } else if pom_content.contains("<java.version>17</java.version>")
         || pom_content.contains("<maven.compiler.source>17</maven.compiler.source>")
-        || pom_content.contains("<maven.compiler.target>17</maven.compiler.target>") {
+        || pom_content.contains("<maven.compiler.target>17</maven.compiler.target>")
+    {
         "17"
-    } else if pom_content.contains("<java.version>21</java.version>") 
+    } else if pom_content.contains("<java.version>21</java.version>")
         || pom_content.contains("<maven.compiler.source>21</maven.compiler.source>")
-        || pom_content.contains("<maven.compiler.target>21</maven.compiler.target>") {
+        || pom_content.contains("<maven.compiler.target>21</maven.compiler.target>")
+    {
         "21"
     } else {
         // 默认使用Java 8
         println!("⚠️  未检测到明确的Java版本配置，默认使用Java 8");
         "8"
     };
-    
+
     // 根据操作系统和Java版本返回对应的JAVA_HOME路径
     let java_home = if cfg!(target_os = "macos") {
         match java_version {
@@ -228,7 +242,10 @@ fn detect_java_version(project_dir: &str) -> Result<String, String> {
                 // 检查是否安装了JDK 8
                 let jdk8_path = "/Library/Java/JavaVirtualMachines/zulu-8.jdk/Contents/Home";
                 if Path::new(jdk8_path).exists() {
-                    println!("🔧 检测到项目需要Java {}，使用: {}", java_version, jdk8_path);
+                    println!(
+                        "🔧 检测到项目需要Java {}，使用: {}",
+                        java_version, jdk8_path
+                    );
                     jdk8_path.to_string()
                 } else {
                     // 尝试其他可能的JDK 8路径
@@ -237,54 +254,86 @@ fn detect_java_version(project_dir: &str) -> Result<String, String> {
                         "/Library/Java/JavaVirtualMachines/temurin-8.jdk/Contents/Home",
                         "/Library/Java/JavaVirtualMachines/jdk1.8.0_*.jdk/Contents/Home",
                     ];
-                    
+
                     for path in alt_paths {
                         if Path::new(path).exists() {
                             println!("🔧 检测到项目需要Java {}，使用: {}", java_version, path);
                             return Ok(path.to_string());
                         }
                     }
-                    
-                    return Err(format!("❌ 项目需要Java {}，但系统中未找到对应的JDK安装。请安装JDK 8", java_version));
+
+                    return Err(format!(
+                        "❌ 项目需要Java {}，但系统中未找到对应的JDK安装。请安装JDK 8",
+                        java_version
+                    ));
                 }
-            },
+            }
             "11" => {
                 let jdk11_path = "/Library/Java/JavaVirtualMachines/zulu-11.jdk/Contents/Home";
                 if Path::new(jdk11_path).exists() {
-                    println!("🔧 检测到项目需要Java {}，使用: {}", java_version, jdk11_path);
+                    println!(
+                        "🔧 检测到项目需要Java {}，使用: {}",
+                        java_version, jdk11_path
+                    );
                     jdk11_path.to_string()
                 } else {
-                    return Err(format!("❌ 项目需要Java {}，但系统中未找到对应的JDK安装", java_version));
+                    return Err(format!(
+                        "❌ 项目需要Java {}，但系统中未找到对应的JDK安装",
+                        java_version
+                    ));
                 }
-            },
+            }
             "17" => {
                 let jdk17_path = "/Library/Java/JavaVirtualMachines/zulu-17.jdk/Contents/Home";
                 if Path::new(jdk17_path).exists() {
-                    println!("🔧 检测到项目需要Java {}，使用: {}", java_version, jdk17_path);
+                    println!(
+                        "🔧 检测到项目需要Java {}，使用: {}",
+                        java_version, jdk17_path
+                    );
                     jdk17_path.to_string()
                 } else {
-                    return Err(format!("❌ 项目需要Java {}，但系统中未找到对应的JDK安装", java_version));
+                    return Err(format!(
+                        "❌ 项目需要Java {}，但系统中未找到对应的JDK安装",
+                        java_version
+                    ));
                 }
-            },
+            }
             "21" => {
                 let jdk21_path = "/Library/Java/JavaVirtualMachines/zulu-21.jdk/Contents/Home";
                 if Path::new(jdk21_path).exists() {
-                    println!("🔧 检测到项目需要Java {}，使用: {}", java_version, jdk21_path);
+                    println!(
+                        "🔧 检测到项目需要Java {}，使用: {}",
+                        java_version, jdk21_path
+                    );
                     jdk21_path.to_string()
                 } else {
-                    return Err(format!("❌ 项目需要Java {}，但系统中未找到对应的JDK安装", java_version));
+                    return Err(format!(
+                        "❌ 项目需要Java {}，但系统中未找到对应的JDK安装",
+                        java_version
+                    ));
                 }
-            },
-            _ => return Err(format!("❌ 不支持的Java版本: {}", java_version))
+            }
+            _ => return Err(format!("❌ 不支持的Java版本: {}", java_version)),
         }
     } else if cfg!(target_os = "windows") {
         // Windows路径处理
-        match java_version {
-            "8" => "C:\\Program Files\\Java\\jdk1.8.0_*".to_string(),
-            "11" => "C:\\Program Files\\Java\\jdk-11".to_string(),
-            "17" => "C:\\Program Files\\Java\\jdk-17".to_string(),
-            "21" => "C:\\Program Files\\Java\\jdk-21".to_string(),
-            _ => return Err(format!("❌ 不支持的Java版本: {}", java_version))
+        // Windows路径处理 - 适配 Zulu JDK
+        let jdk_path = match java_version {
+            "8" => "C:\\Program Files\\Zulu\\zulu-8",
+            "11" => "C:\\Program Files\\Zulu\\zulu-11",
+            "17" => "C:\\Program Files\\Zulu\\zulu-17",
+            "21" => "C:\\Program Files\\Zulu\\zulu-21",
+            _ => return Err(format!("❌ 不支持的Java版本: {}", java_version)),
+        };
+
+        if Path::new(jdk_path).exists() {
+            println!("🔧 检测到项目需要Java {}，使用: {}", java_version, jdk_path);
+            jdk_path.to_string()
+        } else {
+            return Err(format!(
+                "❌ 项目需要Java {}，但系统中未找到对应的JDK安装: {}",
+                java_version, jdk_path
+            ));
         }
     } else {
         // Linux路径处理
@@ -293,10 +342,9 @@ fn detect_java_version(project_dir: &str) -> Result<String, String> {
             "11" => "/usr/lib/jvm/java-11-openjdk".to_string(),
             "17" => "/usr/lib/jvm/java-17-openjdk".to_string(),
             "21" => "/usr/lib/jvm/java-21-openjdk".to_string(),
-            _ => return Err(format!("❌ 不支持的Java版本: {}", java_version))
+            _ => return Err(format!("❌ 不支持的Java版本: {}", java_version)),
         }
     };
-    
+
     Ok(java_home)
 }
-

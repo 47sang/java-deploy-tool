@@ -7,51 +7,42 @@ use walkdir::WalkDir;
 use zip::{write::FileOptions, ZipWriter};
 
 /// 打包 Java 项目
+/// 打包 Java 项目
 pub fn build_java_project(project_dir: &str) -> Result<(), String> {
+    use std::io::{self, Write};
+
+    // 强制刷新 stdout 以确保日志即时显示
+    let _ = io::stdout().flush();
+    println!("正在初始化构建流程 (v2025.11.20)...");
+
     // 检测操作系统类型
     let is_windows = cfg!(target_os = "windows");
 
     // 检测并设置合适的JDK版本
     let java_home = detect_java_version(project_dir)?;
+    println!("使用 JAVA_HOME: {}", java_home);
 
-    // 根据操作系统类型选择适当的命令
-    let mut child = if is_windows {
-        // 在Windows下先尝试mvnd命令
-        match Command::new("cmd")
-            .args(["/c", "mvnd", "clean", "package", "-DskipTests"])
-            .current_dir(project_dir)
-            .env("JAVA_HOME", &java_home)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-        {
-            Ok(child) => {
-                println!("使用mvnd命令执行构建...");
-                child
-            }
-            Err(_) => {
-                // mvnd命令失败，回退到mvn命令
-                println!("mvnd命令未找到，回退使用mvn命令...");
-                Command::new("cmd")
-                    .args(["/c", "mvn", "clean", "package", "-DskipTests"])
-                    .current_dir(project_dir)
-                    .env("JAVA_HOME", &java_home)
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
-                    .map_err(|e| format!("执行mvn命令失败: {}", e))?
-            }
-        }
+    // 构建命令和参数
+    let (cmd, args) = if is_windows {
+        ("cmd", vec!["/c", "mvn", "clean", "package", "-DskipTests"])
     } else {
-        Command::new("mvn")
-            .args(["clean", "package", "-DskipTests"])
-            .current_dir(project_dir)
-            .env("JAVA_HOME", &java_home)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("执行mvn命令失败: {}", e))?
+        ("mvn", vec!["clean", "package", "-DskipTests"])
     };
+
+    println!("执行构建命令: {} {}", cmd, args.join(" "));
+    let _ = io::stdout().flush();
+
+    let mut child = Command::new(cmd)
+        .args(&args)
+        .current_dir(project_dir)
+        // 继承所有环境变量，特别是PATH（包含mvn的路径）
+        .envs(std::env::vars())
+        // 同时设置JAVA_HOME（如果冲突会被覆盖）
+        .env("JAVA_HOME", &java_home)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("无法启动构建命令: {}", e))?;
 
     // 读取并显示标准输出
     if let Some(stdout) = child.stdout.take() {
@@ -73,17 +64,30 @@ pub fn build_java_project(project_dir: &str) -> Result<(), String> {
         Ok(())
     } else {
         // 读取错误输出
+        let mut error_msg = String::new();
         if let Some(stderr) = child.stderr.take() {
             let reader = BufReader::new(stderr);
-            let error = reader
+            error_msg = reader
                 .lines()
                 .filter_map(|line| line.ok())
                 .collect::<Vec<String>>()
                 .join("\n");
-            Err(format!("构建失败:请检查mvn是否配置在环境变量中\n{}\n建议用 'mvn clean package -DskipTests -e' 或 '-X' 获取详细日志", error))
-        } else {
-            Err("构建失败，无法获取错误信息".to_string())
         }
+
+        // 如果 stderr 为空，尝试给一些提示
+        if error_msg.trim().is_empty() {
+            error_msg =
+                "未获取到错误输出 (stderr 为空)。可能是命令未找到或环境变量配置错误。".to_string();
+        }
+
+        Err(format!(
+            "构建失败 (退出码: {:?})\n错误详情:\n{}\n\n建议:\n1. 检查 JAVA_HOME 是否正确: {}\n2. 检查 mvn 是否在 PATH 环境变量中\n3. 尝试手动执行: {} {}",
+            status.code(),
+            error_msg,
+            java_home,
+            cmd,
+            args.join(" ")
+        ))
     }
 }
 

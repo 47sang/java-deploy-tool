@@ -1,20 +1,12 @@
-mod build;
+mod compiler;
 mod config;
+mod deploy;
 mod upload;
 
-use build::{build_java_project, build_vue_project, zip_dir};
 use clap::{Arg, Command};
 use config::DeployConfig;
-use std::fs::File;
-
-use std::thread;
+use deploy::{deploy_java_project, deploy_vue_project};
 use std::time::{Duration, Instant};
-use upload::{upload_file, upload_and_run_jar};
-use indicatif::MultiProgress;
-
-use zip::CompressionMethod;
-use zip::{write::FileOptions, ZipWriter};
-use serde_json::Value;
 
 fn main() {
     let matches = Command::new("deploy-tool")
@@ -38,7 +30,8 @@ fn main() {
                 .help("部署web端环境，多个环境用逗号分隔 (例如: dev,prod)")
                 .value_delimiter(',')
                 .required(false),
-        ).arg(
+        )
+        .arg(
             Arg::new("model")
                 .short('m')
                 .long("model")
@@ -119,7 +112,7 @@ fn main() {
         println!("2.后端环境: {:?}", environments);
         println!("3.web端环境: {:?}", vue_environments);
         println!("4.部署模块: {:?}", models);
-        
+
         // 显示upload_only的实际配置情况
         if upload_only {
             println!("5.仅上传模式: {} (来自命令行参数)", upload_only);
@@ -127,15 +120,19 @@ fn main() {
             println!("5.仅上传模式: (将根据各环境配置文件决定)");
             // 如果有环境参数，显示每个环境的upload_only配置
             if !environments.is_empty() || !vue_environments.is_empty() {
-                let all_envs: std::collections::HashSet<String> = environments.iter()
+                let all_envs: std::collections::HashSet<String> = environments
+                    .iter()
                     .chain(vue_environments.iter())
                     .cloned()
                     .collect();
-                
+
                 for env in &all_envs {
                     match DeployConfig::from_file(&config_path, env) {
                         Ok(config) => {
-                            println!("   - {} 环境配置: upload_only = {}", env, config.upload_only);
+                            println!(
+                                "   - {} 环境配置: upload_only = {}",
+                                env, config.upload_only
+                            );
                         }
                         Err(_) => {
                             println!("   - {} 环境配置: 读取失败", env);
@@ -149,171 +146,27 @@ fn main() {
         if !environments.is_empty() {
             println!("6.开始编译Java项目,请稍等...");
             // 部署Java项目
-            if let Err(e) = deploy_java_project(&project_dir, &config_path, &environments, &models, upload_only) {
-                eprintln!("{}", e);
+            if let Err(e) = deploy_java_project(
+                &project_dir,
+                &config_path,
+                &environments,
+                &models,
+                upload_only,
+            ) {
+                eprintln!("部署失败: {:?}", e);
             }
         }
 
         if !vue_environments.is_empty() {
             println!("6.开始编译Vue项目,比较慢,请稍等...");
             // 部署Vue项目
-            if let Err(e) = deploy_vue_project(&project_dir, &config_path, &vue_environments, upload_only) {
-                eprintln!("{}", e);
+            if let Err(e) =
+                deploy_vue_project(&project_dir, &config_path, &vue_environments, upload_only)
+            {
+                eprintln!("部署失败: {:?}", e);
             }
         }
     });
-}
-
-/// 部署Java项目的函数
-fn deploy_java_project(
-    project_dir: &str,
-    config_path: &str,
-    environments: &[String],
-    models: &[String],
-    upload_only: bool,
-) -> Result<(), String> {
-
-    // 构建Java项目
-    if let Err(e) = build_java_project(project_dir) {
-        return Err(e);
-    }
-
-    // 为每个环境创建部署任务
-    let mut handles = vec![];
-    let multi_progress = MultiProgress::new();
-
-    for env in environments {
-        let env = env.to_string();
-        let config_path = config_path.to_string();
-        let project_dir = project_dir.to_string();
-
-        let config = match DeployConfig::from_file(&config_path, &env) {
-            Ok(config) => config,
-            Err(e) => {
-                eprintln!("加载{}环境配置失败: {}", env, e);
-                continue;
-            }
-        };
-
-        // 处理jar_files字段，根据类型确定是单模块还是多模块
-        match &config.jar_files {
-            Value::Array(jar_array) => {
-                // 多模块项目情况
-                for jar_value in jar_array {
-                    if let Value::String(jar_name) = jar_value {
-                        // 应用命令行参数覆盖
-                        let config = config.clone();
-
-                        if !models.is_empty() && !models.contains(&jar_name.split('.').next().expect("配置文件中jar_name格式错误,无法匹配模块名称").to_string()) {
-                            println!("{}模块不参与部署", jar_name);
-                            continue;
-                        }
-
-                        let project_dir = project_dir.to_string();
-                        let env = env.clone();
-                        // 多模块项目，获取编译产物路径
-                        let jar_path = format!(
-                            "{}/{}/target/{}",
-                            project_dir,
-                            jar_name.split('.').next().unwrap(),
-                            jar_name
-                        );
-
-                        spawn_deploy_thread(jar_name, jar_path, config.clone(), env, upload_only, &mut handles, &multi_progress);
-                    }
-                }
-            },
-            Value::String(jar_name) => {
-                // 单模块项目情况
-                let config = config.clone();
-
-                if !models.is_empty() && !models.contains(&jar_name.split('.').next().expect("配置文件中jar_name格式错误,无法匹配模块名称").to_string()) {
-                    println!("{}模块不参与部署", jar_name);
-                    continue;
-                }
-
-                let project_dir = project_dir.to_string();
-                let env = env.clone();
-                // 单模块项目，获取编译产物路径
-                let jar_path = format!("{}/target/{}", project_dir, jar_name);
-                
-                spawn_deploy_thread(jar_name, jar_path, config.clone(), env, upload_only, &mut handles, &multi_progress);
-            },
-            _ => {
-                eprintln!("配置文件中jar_files格式错误，必须是字符串或字符串数组");
-                continue;
-            }
-        }
-    }
-
-    // 等待所有线程完成
-    for handle in handles {
-        handle.join().unwrap();
-    }
-
-    Ok(())
-}
-
-// 创建并运行部署线程的辅助函数
-fn spawn_deploy_thread(
-    jar_name: &str,
-    jar_path: String,
-    config: DeployConfig,
-    env: String,
-    upload_only: bool,
-    handles: &mut Vec<thread::JoinHandle<()>>,
-    multi_progress: &MultiProgress,
-) {
-    let jar_name = jar_name.to_string();
-    let multi_progress = multi_progress.clone();
-    
-    let handle = thread::spawn(move || {
-        let remote_path = format!("{}/{}", config.remote_base_path, jar_name);
-
-        // 命令行参数优先，如果命令行没有指定则使用配置文件中的设置
-        let final_upload_only = if upload_only {
-            // 如果命令行指定了 --upload-only，则使用命令行的值
-            true
-        } else {
-            // 如果命令行没有指定 --upload-only，则使用配置文件中的值
-            config.upload_only
-        };
-
-        if final_upload_only {
-            println!("开始上传 {} 到 {} 环境", jar_name, env);
-            // 仅上传文件，不执行任何命令
-            if let Err(e) = upload::upload_jar_only(
-                &config.server,
-                &config.username,
-                &config.password,
-                &jar_path,
-                &remote_path,
-                Some(&multi_progress),
-            ) {
-                eprintln!("上传失败 {} ({}环境): {}", jar_name, env, e);
-                return;
-            }
-            println!("上传成功: {} ({}环境)", jar_name, env);
-        } else {
-            println!("开始部署 {} 到 {} 环境", jar_name, env);
-            // 上传并运行 JAR 包
-            if let Err(e) = upload_and_run_jar(
-                &config.server,
-                &config.username,
-                &config.password,
-                &jar_path,
-                &remote_path,
-                &config.java_path,
-                &env,
-                Some(&multi_progress),
-            ) {
-                eprintln!("部署失败 {} ({}环境): {}", jar_name, env, e);
-                return;
-            }
-            println!("部署成功: {} ({}环境)", jar_name, env);
-        }
-    });
-    handles.push(handle);
 }
 
 /// 定义一个测量执行时间的函数
@@ -334,93 +187,4 @@ where
     let now = chrono::Local::now();
     println!("当前系统时间: {}", now.format("%Y-%m-%d %H:%M:%S"));
     elapsed // 返回执行时间
-}
-
-/// 部署Vue项目的函数
-fn deploy_vue_project(
-    project_dir: &str,
-    config_path: &str,
-    environments: &[String],
-    upload_only: bool,
-) -> Result<(), String> {
-    // 为每个环境创建部署任务
-    let mut handles = vec![];
-    let multi_progress = MultiProgress::new();
-
-    for env in environments {
-        let env = env.to_string();
-        let config_path = config_path.to_string();
-        let project_dir = project_dir.to_string();
-
-        let config = match DeployConfig::from_file(&config_path, &env) {
-            Ok(config) => config,
-            Err(e) => {
-                eprintln!("加载{}环境配置失败: {}", env, e);
-                continue;
-            }
-        };
-
-        let multi_progress = multi_progress.clone();
-        let handle = thread::spawn(move || {
-            // 构建Vue项目
-            build_vue_project(&project_dir, &config.scripts).expect("构建Vue项目失败");
-
-            // 压缩产出目录文件zip
-            let output_dir = format!("{}/{}", project_dir, config.output_dir);
-            let zip_path = format!("{}/{}.zip", project_dir, config.output_dir);
-            let zip_file = File::create(&zip_path).expect("创建新的zip文件失败");
-            let mut zip = ZipWriter::new(zip_file);
-            let options = FileOptions::default().compression_method(CompressionMethod::Deflated);
-            zip_dir(&mut zip, &output_dir, options).expect("压缩失败");
-            zip.finish().expect("完成ZIP文件失败");
-
-            // 上传zip文件
-            let remote_path = format!("{}/{}", config.remote_base_path, config.output_dir);
-
-            // 命令行参数优先，如果命令行没有指定则使用配置文件中的设置
-            let final_upload_only = if upload_only {
-                // 如果命令行指定了 --upload-only，则使用命令行的值
-                true
-            } else {
-                // 如果命令行没有指定 --upload-only，则使用配置文件中的值
-                config.upload_only
-            };
-
-            if final_upload_only {
-                // 仅上传文件，不执行解压等命令
-                if let Err(e) = upload::upload_zip_only(
-                    &config.server,
-                    &config.username,
-                    &config.password,
-                    &zip_path,
-                    &remote_path,
-                    Some(&multi_progress),
-                ) {
-                    eprintln!("上传失败 {} ({}环境): {}", config.output_dir, env, e);
-                    return;
-                }
-                println!("上传成功: {} ({}环境)", config.output_dir, env);
-            } else {
-                // 上传并解压
-                if let Err(e) = upload_file(
-                    &config.server,
-                    &config.username,
-                    &config.password,
-                    &zip_path,
-                    &remote_path,
-                    Some(&multi_progress),
-                ) {
-                    eprintln!("上传失败 {} ({}环境): {}", config.output_dir, env, e);
-                    return;
-                }
-                println!("上传成功: {} ({}环境)", config.output_dir, env);
-            }
-        });
-        handles.push(handle);
-    }
-    // 等待所有线程完成
-    for handle in handles {
-        handle.join().unwrap();
-    }
-    Ok(())
 }

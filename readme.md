@@ -86,7 +86,29 @@ output_dir = "dist-test"
 ```
 
 
-然后配置系统中mvn到系统path路径,不然找不到mvn命令
+## 环境要求
+
+### 自动检测功能 ✨
+
+工具会自动检测系统中已安装的Java和Maven,**无需手动配置环境变量**!
+
+支持的检测场景:
+- ✅ IDEA自带的JDK和Maven
+- ✅ 系统安装的JDK (Zulu, OpenJDK, Oracle JDK等)
+- ✅ Homebrew安装的JDK和Maven (macOS)
+- ✅ 环境变量中配置的JAVA_HOME和Maven
+
+### 安装建议
+
+**方式1: 使用IntelliJ IDEA (推荐)**
+- IDEA自带JDK和Maven,工具会自动检测使用
+
+**方式2: 手动安装**
+- macOS: `brew install openjdk@8 maven` (或其他版本)
+- Windows: 下载安装Zulu JDK和Apache Maven
+- Linux: `sudo apt install openjdk-8-jdk maven`
+
+**注意**: 工具会根据项目的`pom.xml`自动选择合适的Java版本(支持8/11/17/21)
 
 # vue项目多环境部署
 ```bash

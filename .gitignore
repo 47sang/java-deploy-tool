@@ -1,3 +1,30 @@
 /target
 .idea
-.Ds_Store
+.DS_Store
+Thumbs.db
+
+# ─── Go ───────────────────────────────────────────
+# 编译产物（注：go-deploy-tool/deploy-tool 已入库，加入 .gitignore 后
+# 仍需 git rm --cached 才能从索引中移除，否则变更不会被忽略）
+go-deploy-tool/deploy-tool
+*.test
+*.out
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# 依赖 vendor 目录
+vendor/
+
+# 测试覆盖率
+*.cover
+coverage.html
+
+# IDE
+.vscode/
+
+# 临时文件
+*~
+*.tmp

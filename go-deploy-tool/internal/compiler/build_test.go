@@ -78,3 +78,39 @@ func TestRunBuildCommand_TimesOut(t *testing.T) {
 		t.Fatalf("超时应及时终止子进程，实际耗时 %v", elapsed)
 	}
 }
+
+// TestOverrideEnv 验证覆盖同名环境变量：新值生效、旧值被剔除、且不产生重复 key。
+// 直接 append 会在父进程已有同名变量时残留旧值（Unix 取第一个 key），本测试锁定该修复。
+func TestOverrideEnv(t *testing.T) {
+	t.Parallel()
+	base := []string{"PATH=/usr/bin", "JAVA_HOME=/old/jdk", "HOME=/root"}
+
+	got := overrideEnv(base, "JAVA_HOME", "/new/jdk")
+	joined := strings.Join(got, "\n")
+
+	if !strings.Contains(joined, "JAVA_HOME=/new/jdk") {
+		t.Errorf("应包含覆盖后的新值 JAVA_HOME=/new/jdk，实际 %v", got)
+	}
+	if strings.Contains(joined, "JAVA_HOME=/old/jdk") {
+		t.Errorf("不应保留旧值 JAVA_HOME=/old/jdk，实际 %v", got)
+	}
+	if !strings.Contains(joined, "HOME=/root") || !strings.Contains(joined, "PATH=/usr/bin") {
+		t.Errorf("不应丢失无关变量，实际 %v", got)
+	}
+	// JAVA_HOME 应唯一存在，不得出现重复 key
+	count := 0
+	for _, e := range got {
+		if strings.HasPrefix(e, "JAVA_HOME=") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("JAVA_HOME 应唯一，实际出现 %d 次", count)
+	}
+
+	// base 中不存在该 key 时，正常追加到末尾
+	got = overrideEnv([]string{"A=1"}, "B", "2")
+	if len(got) != 2 || got[1] != "B=2" {
+		t.Errorf("新增 key 应追加到末尾，实际 %v", got)
+	}
+}

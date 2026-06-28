@@ -77,3 +77,20 @@ func runBuildCommand(ctx context.Context, name string, args []string, dir string
 	}
 	return stderrOutput.String(), nil
 }
+
+// overrideEnv 在 base 环境变量列表上以 value 设置 key，覆盖任何已存在的同名变量。
+//
+// 直接 append(base, "KEY=...") 会在父进程已有该 key 时产生重复条目；Unix 进程加载
+// 环境时通常取第一个匹配 key，导致后追加的值不生效（例如覆盖父进程的 JAVA_HOME 时，
+// 子进程仍拿到旧 JDK）。因此这里先剔除同 key 条目再追加，确保注入值唯一且生效。
+func overrideEnv(base []string, key, value string) []string {
+	prefix := key + "="
+	out := make([]string, 0, len(base)+1)
+	for _, e := range base {
+		if strings.HasPrefix(e, prefix) {
+			continue
+		}
+		out = append(out, e)
+	}
+	return append(out, prefix+value)
+}

@@ -35,8 +35,9 @@ func BuildJavaProject(ctx context.Context, projectDir string) error {
 	args := []string{"clean", "package", "-DskipTests"}
 	fmt.Printf("执行构建命令: %s %s\n", mavenInfo.Path, strings.Join(args, " "))
 
-	// 注入 JAVA_HOME 环境变量（追加到继承的父进程环境）
-	env := append(os.Environ(), fmt.Sprintf("JAVA_HOME=%s", javaHome))
+	// 注入 JAVA_HOME 环境变量：覆盖式设置，确保覆盖父进程可能已有的同名变量并生效
+	// （直接 append 会在父进程已含 JAVA_HOME 时产生重复 key，Unix 取第一个导致旧值残留）
+	env := overrideEnv(os.Environ(), "JAVA_HOME", javaHome)
 
 	stderrOutput, err := runBuildCommand(ctx, mavenInfo.Path, args, projectDir, env)
 	if err != nil {

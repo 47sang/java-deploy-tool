@@ -432,11 +432,11 @@ func UploadZipOnly(server, username, password, localPath, remotePath string) err
 	}
 	defer client.Close()
 
-	// 调整远程路径
+	// 调整远程路径：去除末尾的 .zip 后缀（仅上传场景，远程文件名不应携带 .zip）。
+	// 注意：原实现紧跟一个恒为 true 的 if 回退判断——TrimSuffix 后必然不含 .zip，
+	// 于是 remoteZipPath 被还原为原 remotePath，后缀实际从未被去除，与 Rust 版
+	// 的 .replace(".zip", "") 行为不一致。
 	remoteZipPath := strings.TrimSuffix(remotePath, ".zip")
-	if !strings.HasSuffix(remoteZipPath, ".zip") {
-		remoteZipPath = remotePath
-	}
 
 	// 上传文件
 	if err := client.UploadFile(localPath, remoteZipPath, true); err != nil {

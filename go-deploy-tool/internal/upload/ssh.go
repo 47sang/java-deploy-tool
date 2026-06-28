@@ -170,9 +170,10 @@ func (c *SSHClient) UploadFile(localPath, remotePath string, showProgress bool) 
 	}
 
 	// 写入文件（受上传超时约束；超时则关闭远程文件句柄以中断阻塞的 io.Copy）
+	var copied int64
 	copyErr := timeout.RunWithTimeout(timeout.UploadTimeout, func() error {
 		var e error
-		_, e = io.Copy(remoteFile, reader)
+		copied, e = io.Copy(remoteFile, reader)
 		return e
 	}, func() { remoteFile.Close() })
 	if copyErr != nil {
@@ -180,6 +181,12 @@ func (c *SSHClient) UploadFile(localPath, remotePath string, showProgress bool) 
 			return fmt.Errorf("文件上传超时 %s（上限 %v）: %w", localPath, timeout.UploadTimeout, timeout.ErrTimeout)
 		}
 		return fmt.Errorf("写入远程文件失败: %v", copyErr)
+	}
+	// 完整性校验：实际写入字节数须与本地文件大小一致。若本地文件在上传过程中被截断
+	// 或修改，io.Copy 会读到提前 EOF 并以 nil 错误返回，导致静默上传不完整的文件。
+	if copied != fileSize {
+		return fmt.Errorf("文件上传不完整: 已写入 %d 字节，预期 %d 字节（本地文件 %s）",
+			copied, fileSize, localPath)
 	}
 
 	fmt.Printf("\n文件上传完成: %s\n", tempRemotePath)

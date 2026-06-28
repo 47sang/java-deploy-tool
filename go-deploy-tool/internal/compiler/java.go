@@ -49,7 +49,7 @@ func BuildJavaProject(ctx context.Context, projectDir string) error {
 		if strings.TrimSpace(msg) == "" {
 			msg = "未获取到错误输出 (stderr 为空)。可能是命令未找到或环境变量配置错误。"
 		}
-		return fmt.Errorf("构建失败 (退出码: %v)\n错误详情:\n%s\n\n建议:\n1. 检查 JAVA_HOME 是否正确: %s\n2. 检查 Maven 路径: %s\n3. 尝试手动执行: %s %s",
+		return fmt.Errorf("构建失败 (退出码: %w)\n错误详情:\n%s\n\n建议:\n1. 检查 JAVA_HOME 是否正确: %s\n2. 检查 Maven 路径: %s\n3. 尝试手动执行: %s %s",
 			err, msg, javaHome, mavenInfo.Path, mavenInfo.Path, strings.Join(args, " "))
 	}
 

@@ -49,7 +49,7 @@ func NewSSHClient(server, username, password string) (*SSHClient, error) {
 
 	client, err := ssh.Dial("tcp", server, config)
 	if err != nil {
-		return nil, fmt.Errorf("SSH连接失败: %v", err)
+		return nil, fmt.Errorf("SSH连接失败（服务器 %s）: %w", server, err)
 	}
 
 	return &SSHClient{client: client}, nil
@@ -76,7 +76,7 @@ func (c *SSHClient) ExecuteCommand(command string) (string, error) {
 func (c *SSHClient) executeCommandWithTimeout(command string, timeoutDur time.Duration) (string, error) {
 	session, err := c.client.NewSession()
 	if err != nil {
-		return "", fmt.Errorf("创建SSH会话失败: %v", err)
+		return "", fmt.Errorf("创建SSH会话失败: %w", err)
 	}
 	defer session.Close()
 
@@ -102,7 +102,7 @@ func (c *SSHClient) executeCommandWithTimeout(command string, timeoutDur time.Du
 				return string(output), fmt.Errorf("远程命令执行失败，退出状态: %d", exitErr.ExitStatus())
 			}
 		}
-		return string(output), fmt.Errorf("执行远程命令失败: %v", execErr)
+		return string(output), fmt.Errorf("执行远程命令失败: %w", execErr)
 	}
 
 	return string(output), nil
@@ -129,7 +129,7 @@ func (c *SSHClient) UploadFile(localPath, remotePath string, showProgress bool) 
 	// 创建 SFTP 客户端
 	sftpClient, err := sftp.NewClient(c.client)
 	if err != nil {
-		return fmt.Errorf("创建SFTP客户端失败: %v", err)
+		return fmt.Errorf("创建SFTP客户端失败: %w", err)
 	}
 	defer sftpClient.Close()
 
@@ -180,7 +180,7 @@ func (c *SSHClient) UploadFile(localPath, remotePath string, showProgress bool) 
 		if errors.Is(copyErr, timeout.ErrTimeout) {
 			return fmt.Errorf("文件上传超时 %s（上限 %v）: %w", localPath, timeout.UploadTimeout, timeout.ErrTimeout)
 		}
-		return fmt.Errorf("写入远程文件失败: %v", copyErr)
+		return fmt.Errorf("写入远程文件失败: %w", copyErr)
 	}
 	// 完整性校验：实际写入字节数须与本地文件大小一致。若本地文件在上传过程中被截断
 	// 或修改，io.Copy 会读到提前 EOF 并以 nil 错误返回，导致静默上传不完整的文件。

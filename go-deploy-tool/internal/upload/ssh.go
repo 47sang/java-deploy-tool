@@ -218,6 +218,26 @@ func (c *SSHClient) UploadFile(localPath, remotePath string, showProgress bool) 
 	return nil
 }
 
+// uploadWithRetry 在 MaxRetries 次内重试上传单个文件，每次重试间隔 RetryDelay。
+// 成功返回 nil；全部失败则返回包装了最后一次错误的错误。供 UploadAndRunJar 等
+// 顶层上传函数复用，消除原先各自重复实现的重试循环；重试日志使用并发安全的
+// SafePrintf，避免多环境并发部署时输出交错。
+func (c *SSHClient) uploadWithRetry(localPath, remotePath string) error {
+	var uploadErr error
+	for attempt := 0; attempt < MaxRetries; attempt++ {
+		if attempt > 0 {
+			utils.SafePrintf("尝试重新上传文件 (第%d次重试)...\n", attempt)
+			time.Sleep(RetryDelay)
+		}
+		uploadErr = c.UploadFile(localPath, remotePath, true)
+		if uploadErr == nil {
+			return nil
+		}
+		utils.SafePrintf("文件上传失败: %v，正在重试...\n", uploadErr)
+	}
+	return fmt.Errorf("文件上传失败，已达到最大重试次数(%d次): %w", MaxRetries, uploadErr)
+}
+
 // KillProcess 杀死远程服务器上的进程
 func (c *SSHClient) KillProcess(jarPath, env string) error {
 	// 查找进程 PID。"|| true" 兜底确保命令退出码恒为 0（grep 无匹配时退出码 1），
@@ -349,22 +369,8 @@ func UploadAndRunJar(server, username, password, localPath, remotePath, javaPath
 	defer client.Close()
 
 	// 上传文件（带重试）
-	var uploadErr error
-	for attempt := 0; attempt < MaxRetries; attempt++ {
-		if attempt > 0 {
-			fmt.Printf("尝试重新上传文件 (第%d次重试)...\n", attempt)
-			time.Sleep(RetryDelay)
-		}
-
-		uploadErr = client.UploadFile(localPath, remotePath, true)
-		if uploadErr == nil {
-			break
-		}
-		fmt.Printf("文件上传失败: %v，正在重试...\n", uploadErr)
-	}
-
-	if uploadErr != nil {
-		return fmt.Errorf("文件上传失败，已达到最大重试次数(%d次): %v", MaxRetries, uploadErr)
+	if err := client.uploadWithRetry(localPath, remotePath); err != nil {
+		return err
 	}
 
 	utils.PrintSuccess("JAR 文件上传成功! %s -> %s (大小: %.2f MB)",
@@ -402,22 +408,8 @@ func UploadJarOnly(server, username, password, localPath, remotePath string) err
 	defer client.Close()
 
 	// 上传文件（带重试）
-	var uploadErr error
-	for attempt := 0; attempt < MaxRetries; attempt++ {
-		if attempt > 0 {
-			fmt.Printf("尝试重新上传文件 (第%d次重试)...\n", attempt)
-			time.Sleep(RetryDelay)
-		}
-
-		uploadErr = client.UploadFile(localPath, remotePath, true)
-		if uploadErr == nil {
-			break
-		}
-		fmt.Printf("文件上传失败: %v，正在重试...\n", uploadErr)
-	}
-
-	if uploadErr != nil {
-		return fmt.Errorf("文件上传失败，已达到最大重试次数(%d次): %v", MaxRetries, uploadErr)
+	if err := client.uploadWithRetry(localPath, remotePath); err != nil {
+		return err
 	}
 
 	utils.PrintSuccess("JAR 文件上传成功! %s -> %s (大小: %.2f MB)",
@@ -447,8 +439,8 @@ func UploadZipOnly(server, username, password, localPath, remotePath string) err
 	// 的 .replace(".zip", "") 行为不一致。
 	remoteZipPath := strings.TrimSuffix(remotePath, ".zip")
 
-	// 上传文件
-	if err := client.UploadFile(localPath, remoteZipPath, true); err != nil {
+	// 上传文件（带重试）
+	if err := client.uploadWithRetry(localPath, remoteZipPath); err != nil {
 		return err
 	}
 
@@ -485,8 +477,8 @@ func UploadAndExtractZip(server, username, password, localPath, remotePath strin
 		extractDir = remotePath
 	}
 
-	// 上传 ZIP 文件
-	if err := client.UploadFile(localPath, remoteZipPath, true); err != nil {
+	// 上传 ZIP 文件（带重试）
+	if err := client.uploadWithRetry(localPath, remoteZipPath); err != nil {
 		return err
 	}
 

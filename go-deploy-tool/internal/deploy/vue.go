@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -11,8 +12,9 @@ import (
 	"deploy-tool/internal/upload"
 )
 
-// DeployVueProject 部署 Vue 项目
-func DeployVueProject(projectDir, configPath string, environments []string, uploadOnly bool) error {
+// DeployVueProject 部署 Vue 项目。
+// ctx 贯穿到每个环境的本地构建（compiler.BuildVueProject）以支持超时与取消（如 Ctrl+C）。
+func DeployVueProject(ctx context.Context, projectDir, configPath string, environments []string, uploadOnly bool) error {
 	// 使用 WaitGroup 等待所有部署任务完成
 	var wg sync.WaitGroup
 	errChan := make(chan error, 100)
@@ -29,7 +31,7 @@ func DeployVueProject(projectDir, configPath string, environments []string, uplo
 			defer wg.Done()
 
 			// 构建 Vue 项目
-			if err := compiler.BuildVueProject(projectDir, cfg.Scripts); err != nil {
+			if err := compiler.BuildVueProject(ctx, projectDir, cfg.Scripts); err != nil {
 				errChan <- fmt.Errorf("构建Vue项目失败 (%s环境): %v", env, err)
 				return
 			}

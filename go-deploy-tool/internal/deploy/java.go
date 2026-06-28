@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -11,10 +12,11 @@ import (
 	"deploy-tool/internal/upload"
 )
 
-// DeployJavaProject 部署 Java 项目
-func DeployJavaProject(projectDir, configPath string, environments, models []string, uploadOnly bool) error {
+// DeployJavaProject 部署 Java 项目。
+// ctx 贯穿到本地构建（compiler.BuildJavaProject）以支持超时与取消（如 Ctrl+C）。
+func DeployJavaProject(ctx context.Context, projectDir, configPath string, environments, models []string, uploadOnly bool) error {
 	// 构建 Java 项目
-	if err := compiler.BuildJavaProject(projectDir); err != nil {
+	if err := compiler.BuildJavaProject(ctx, projectDir); err != nil {
 		return err
 	}
 

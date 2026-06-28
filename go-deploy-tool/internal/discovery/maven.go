@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"deploy-tool/internal/timeout"
 	"deploy-tool/pkg/utils"
 )
 
@@ -185,10 +186,13 @@ func checkMavenVersion(mvnPath string) *MavenInfo {
 		return nil
 	}
 
-	// 执行 mvn --version 获取版本信息
-	cmd := exec.Command(mvnPath, "--version")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
+	// 执行 mvn --version 获取版本信息（受探测超时约束，避免异常 Maven 卡住搜索）
+	var output []byte
+	if err := timeout.RunWithTimeout(timeout.ProbeTimeout, func() error {
+		var e error
+		output, e = exec.Command(mvnPath, "--version").CombinedOutput()
+		return e
+	}, nil); err != nil {
 		return nil
 	}
 

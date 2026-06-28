@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
 	"time"
 
@@ -20,12 +22,12 @@ const (
 
 var (
 	// 命令行参数
-	environments   []string
+	environments    []string
 	vueEnvironments []string
-	models         []string
-	projectDir     string
-	uploadOnly     bool
-	initConfig     bool
+	models          []string
+	projectDir      string
+	uploadOnly      bool
+	initConfig      bool
 )
 
 func main() {
@@ -63,6 +65,11 @@ func main() {
 func runDeploy(cmd *cobra.Command, args []string) {
 	startTime := time.Now()
 	fmt.Println("开始执行脚本程序")
+
+	// 创建支持 Ctrl+C 优雅取消的根 context：收到中断信号后，所有派生的构建子进程
+	// （exec.CommandContext）与远程命令（SSH）都会被取消/中断，避免部署卡死时只能强杀进程
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
 
 	configPath := "./deploy.toml"
 
@@ -112,7 +119,7 @@ func runDeploy(cmd *cobra.Command, args []string) {
 	// 部署 Java 项目
 	if len(environments) > 0 {
 		utils.PrintStep(6, "开始编译Java项目,请稍等...")
-		if err := deploy.DeployJavaProject(projectDir, configPath, environments, models, uploadOnly); err != nil {
+		if err := deploy.DeployJavaProject(ctx, projectDir, configPath, environments, models, uploadOnly); err != nil {
 			fmt.Printf("部署失败: %v\n", err)
 		}
 	}
@@ -120,7 +127,7 @@ func runDeploy(cmd *cobra.Command, args []string) {
 	// 部署 Vue 项目
 	if len(vueEnvironments) > 0 {
 		utils.PrintStep(6, "开始编译Vue项目,比较慢,请稍等...")
-		if err := deploy.DeployVueProject(projectDir, configPath, vueEnvironments, uploadOnly); err != nil {
+		if err := deploy.DeployVueProject(ctx, projectDir, configPath, vueEnvironments, uploadOnly); err != nil {
 			fmt.Printf("部署失败: %v\n", err)
 		}
 	}

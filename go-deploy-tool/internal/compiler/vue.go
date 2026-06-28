@@ -1,92 +1,77 @@
 package compiler
 
 import (
-	"bufio"
+	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"runtime"
-	"strings"
 
+	"deploy-tool/internal/timeout"
 	"deploy-tool/pkg/utils"
 )
 
-// BuildVueProject 构建 Vue 项目
-func BuildVueProject(projectDir string, scripts string) error {
+// BuildVueProject 构建 Vue 项目。
+// ctx 叠加 timeout.BuildTimeout 作为单次构建上限，超时后自动终止 npm 子进程，
+// 避免 npm 构建卡死（依赖安装、网络问题）永久阻塞部署。
+func BuildVueProject(ctx context.Context, projectDir string, scripts string) error {
 	fmt.Printf("开始构建Vue项目，脚本: %s\n", scripts)
 
-	var cmd *exec.Cmd
-
 	// 根据操作系统类型选择适当的命令
+	var name string
+	var args []string
 	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/c", "npm", "run", scripts)
+		name = "cmd"
+		args = []string{"/c", "npm", "run", scripts}
 	} else {
-		cmd = exec.Command("npm", "run", scripts)
+		name = "npm"
+		args = []string{"run", scripts}
 	}
 
-	cmd.Dir = projectDir
-
-	// 获取标准输出管道
-	stdout, err := cmd.StdoutPipe()
+	stderrOutput, err := runBuildCommand(ctx, name, args, projectDir, nil)
 	if err != nil {
-		return fmt.Errorf("无法获取标准输出管道: %v", err)
-	}
-
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return fmt.Errorf("无法获取标准错误管道: %v", err)
-	}
-
-	// 启动命令
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("执行npm命令失败: %v", err)
-	}
-
-	// 读取并显示标准输出
-	go func() {
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			fmt.Println(scanner.Text())
+		// 构建超时：错误已含超时提示，直接返回
+		if errors.Is(err, context.DeadlineExceeded) {
+			return err
 		}
-	}()
-
-	// 读取标准错误
-	var stderrOutput strings.Builder
-	go func() {
-		scanner := bufio.NewScanner(stderr)
-		for scanner.Scan() {
-			line := scanner.Text()
-			stderrOutput.WriteString(line + "\n")
-			fmt.Println(line)
-		}
-	}()
-
-	// 等待命令完成
-	if err := cmd.Wait(); err != nil {
-		errorMsg := stderrOutput.String()
-		return fmt.Errorf("构建失败:请检查npm是否配置在环境变量中\n%s", errorMsg)
+		return fmt.Errorf("构建失败:请检查npm是否配置在环境变量中\n%s", stderrOutput)
 	}
 
 	utils.PrintSuccess("%s环境下的Vue项目构建成功!", scripts)
 	return nil
 }
 
-// CheckNodeJS 检查 Node.js 是否可用
+// CheckNodeJS 检查 Node.js 是否可用。
+// 每条探测命令受 timeout.ProbeTimeout 约束，避免 node/npm 异常挂起阻塞流程。
 func CheckNodeJS() error {
 	// 检查 node 命令
-	cmd := exec.Command("node", "--version")
-	output, err := cmd.Output()
+	output, err := runProbeCommand("node", "--version")
 	if err != nil {
 		return fmt.Errorf("Node.js 未安装或未在环境变量中配置")
 	}
-	fmt.Printf("Node.js 版本: %s", string(output))
+	fmt.Printf("Node.js 版本: %s", output)
 
 	// 检查 npm 命令
-	cmd = exec.Command("npm", "--version")
-	output, err = cmd.Output()
+	output, err = runProbeCommand("npm", "--version")
 	if err != nil {
 		return fmt.Errorf("npm 未安装或未在环境变量中配置")
 	}
-	fmt.Printf("npm 版本: %s", string(output))
+	fmt.Printf("npm 版本: %s", output)
 
 	return nil
+}
+
+// runProbeCommand 在 timeout.ProbeTimeout 内执行一条本地探测命令并返回其标准输出。
+// 超时或执行失败均返回错误，由调用方决定如何处理。
+func runProbeCommand(name string, args ...string) (string, error) {
+	var output []byte
+	err := timeout.RunWithTimeout(timeout.ProbeTimeout, func() error {
+		var e error
+		output, e = exec.Command(name, args...).Output()
+		return e
+	}, nil)
+	if err != nil {
+		return "", err
+	}
+	return string(output), nil
 }

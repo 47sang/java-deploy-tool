@@ -1,10 +1,10 @@
 package compiler
 
 import (
-	"bufio"
+	"context"
+	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -12,8 +12,10 @@ import (
 	"deploy-tool/pkg/utils"
 )
 
-// BuildJavaProject 构建 Java 项目
-func BuildJavaProject(projectDir string) error {
+// BuildJavaProject 构建 Java 项目。
+// ctx 用于整体取消控制（如 Ctrl+C）；内部叠加 timeout.BuildTimeout 作为单次构建上限，
+// 超时后自动终止 Maven 子进程，避免构建卡死（下载依赖、网络问题）永久阻塞部署。
+func BuildJavaProject(ctx context.Context, projectDir string) error {
 	fmt.Println("正在初始化构建流程 (v2025.12.08)...")
 
 	// 检测并设置合适的 JDK 版本
@@ -31,60 +33,23 @@ func BuildJavaProject(projectDir string) error {
 
 	// 构建 Maven 命令参数
 	args := []string{"clean", "package", "-DskipTests"}
-
 	fmt.Printf("执行构建命令: %s %s\n", mavenInfo.Path, strings.Join(args, " "))
 
-	// 创建命令
-	cmd := exec.Command(mavenInfo.Path, args...)
-	cmd.Dir = projectDir
+	// 注入 JAVA_HOME 环境变量（追加到继承的父进程环境）
+	env := append(os.Environ(), fmt.Sprintf("JAVA_HOME=%s", javaHome))
 
-	// 设置环境变量
-	cmd.Env = os.Environ()
-	cmd.Env = append(cmd.Env, fmt.Sprintf("JAVA_HOME=%s", javaHome))
-
-	// 获取标准输出管道
-	stdout, err := cmd.StdoutPipe()
+	stderrOutput, err := runBuildCommand(ctx, mavenInfo.Path, args, projectDir, env)
 	if err != nil {
-		return fmt.Errorf("无法获取标准输出管道: %v", err)
-	}
-
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return fmt.Errorf("无法获取标准错误管道: %v", err)
-	}
-
-	// 启动命令
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("无法启动构建命令: %v", err)
-	}
-
-	// 读取并显示标准输出
-	go func() {
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			fmt.Println(scanner.Text())
+		// 构建超时：错误已含超时提示，直接返回
+		if errors.Is(err, context.DeadlineExceeded) {
+			return err
 		}
-	}()
-
-	// 读取标准错误
-	var stderrOutput strings.Builder
-	go func() {
-		scanner := bufio.NewScanner(stderr)
-		for scanner.Scan() {
-			line := scanner.Text()
-			stderrOutput.WriteString(line + "\n")
-			fmt.Println(line)
-		}
-	}()
-
-	// 等待命令完成
-	if err := cmd.Wait(); err != nil {
-		errorMsg := stderrOutput.String()
-		if strings.TrimSpace(errorMsg) == "" {
-			errorMsg = "未获取到错误输出 (stderr 为空)。可能是命令未找到或环境变量配置错误。"
+		msg := stderrOutput
+		if strings.TrimSpace(msg) == "" {
+			msg = "未获取到错误输出 (stderr 为空)。可能是命令未找到或环境变量配置错误。"
 		}
 		return fmt.Errorf("构建失败 (退出码: %v)\n错误详情:\n%s\n\n建议:\n1. 检查 JAVA_HOME 是否正确: %s\n2. 检查 Maven 路径: %s\n3. 尝试手动执行: %s %s",
-			err, errorMsg, javaHome, mavenInfo.Path, mavenInfo.Path, strings.Join(args, " "))
+			err, msg, javaHome, mavenInfo.Path, mavenInfo.Path, strings.Join(args, " "))
 	}
 
 	utils.PrintSuccess("Java 项目构建成功!")

@@ -1,6 +1,7 @@
 package upload
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"deploy-tool/internal/timeout"
 	"deploy-tool/pkg/utils"
 
 	"github.com/pkg/sftp"
@@ -63,8 +65,15 @@ func (c *SSHClient) Close() {
 	}
 }
 
-// ExecuteCommand 执行远程命令
+// ExecuteCommand 执行远程命令，使用默认的 timeout.CommandTimeout 作为单条命令超时。
 func (c *SSHClient) ExecuteCommand(command string) (string, error) {
+	return c.executeCommandWithTimeout(command, timeout.CommandTimeout)
+}
+
+// executeCommandWithTimeout 执行远程命令，单条命令受 timeoutDur 约束。
+// 超时则关闭 session 中断阻塞的 CombinedOutput，避免 kill/unzip/nohup 等远程命令
+// 挂起导致整个部署永久阻塞。timeoutDur 参数便于单元测试注入短超时。
+func (c *SSHClient) executeCommandWithTimeout(command string, timeoutDur time.Duration) (string, error) {
 	session, err := c.client.NewSession()
 	if err != nil {
 		return "", fmt.Errorf("创建SSH会话失败: %v", err)
@@ -73,15 +82,27 @@ func (c *SSHClient) ExecuteCommand(command string) (string, error) {
 
 	fmt.Printf("执行远程命令: %s\n", command)
 
-	output, err := session.CombinedOutput(command)
-	if err != nil {
+	var output []byte
+	execErr := timeout.RunWithTimeout(timeoutDur, func() error {
+		var e error
+		output, e = session.CombinedOutput(command)
+		return e
+	}, func() {
+		// 超时则关闭 session，使阻塞中的 CombinedOutput 立即返回
+		session.Close()
+	})
+	if execErr != nil {
+		// 优先识别超时
+		if errors.Is(execErr, timeout.ErrTimeout) {
+			return string(output), fmt.Errorf("远程命令执行超时 %s（上限 %v）: %w", command, timeoutDur, timeout.ErrTimeout)
+		}
 		// 检查是否是退出码错误
-		if exitErr, ok := err.(*ssh.ExitError); ok {
+		if exitErr, ok := execErr.(*ssh.ExitError); ok {
 			if exitErr.ExitStatus() != 0 {
 				return string(output), fmt.Errorf("远程命令执行失败，退出状态: %d", exitErr.ExitStatus())
 			}
 		}
-		return string(output), fmt.Errorf("执行远程命令失败: %v", err)
+		return string(output), fmt.Errorf("执行远程命令失败: %v", execErr)
 	}
 
 	return string(output), nil
@@ -148,10 +169,17 @@ func (c *SSHClient) UploadFile(localPath, remotePath string, showProgress bool) 
 		reader = io.TeeReader(localFile, bar)
 	}
 
-	// 写入文件
-	_, err = io.Copy(remoteFile, reader)
-	if err != nil {
-		return fmt.Errorf("写入远程文件失败: %v", err)
+	// 写入文件（受上传超时约束；超时则关闭远程文件句柄以中断阻塞的 io.Copy）
+	copyErr := timeout.RunWithTimeout(timeout.UploadTimeout, func() error {
+		var e error
+		_, e = io.Copy(remoteFile, reader)
+		return e
+	}, func() { remoteFile.Close() })
+	if copyErr != nil {
+		if errors.Is(copyErr, timeout.ErrTimeout) {
+			return fmt.Errorf("文件上传超时 %s（上限 %v）: %w", localPath, timeout.UploadTimeout, timeout.ErrTimeout)
+		}
+		return fmt.Errorf("写入远程文件失败: %v", copyErr)
 	}
 
 	fmt.Printf("\n文件上传完成: %s\n", tempRemotePath)

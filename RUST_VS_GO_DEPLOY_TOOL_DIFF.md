@@ -6,7 +6,7 @@
 
 Go 重写版在核心功能上**与 Rust 原版基本对等**，完整还原了 CLI 解析、配置管理、Java/Vue 编译链路、ZIP 打包、SFTP 上传、进程管理等全部主流程；同时通过拆分 `internal/discovery` 与 `internal/timeout` 包、引入错误聚合与输出互斥机制、扩展 JDK/Maven 搜索路径、统一上传重试等方式，在可维护性、环境适应性与可靠性上有所增强。
 
-初版报告中标记的精细化进度展示、文件完整性校验、JAVA_HOME 注入、UploadZipOnly 后缀、KillProcess 错误传播、并发输出交错、错误链、统一重试等问题**已在 `go` 分支全部修复**（详见 §8.2）。当前仅余 pom.xml 失败降级策略（设计取舍，非缺陷）、SFTP 备份两步操作的非原子性、`errChan` 固定缓冲等少量中低风险点供后续评估。
+初版报告中标记的精细化进度展示、文件完整性校验、JAVA_HOME 注入、UploadZipOnly 后缀、KillProcess 错误传播、并发输出交错、错误链、统一重试等问题**已在 `go` 分支全部修复**（详见 §8.2）。本轮另完成错误链 `%v→%w` 统一、`SSHClient.session` 死字段清理、`MkdirAll` 静默吞错修复，并将 pom.xml 降级改为报错、`errChan` 缓冲改为任务总数（详见 §8.3）。当前仅余 SFTP 备份两步操作的非原子性等少量低风险点供后续评估。
 
 ---
 
@@ -55,7 +55,7 @@ Rust 版将全部 Java 编译链路（JDK 探测、Maven 探测、pom.xml 解析
 
 - **Maven Wrapper (mvnw/mvnw.cmd) 自动检测**：第 4 步优先检查当前目录的 Maven Wrapper，失败时才回退到全局 Maven。
 - **MAVEN_HOME / M2_HOME 环境变量支持**：兼容旧版 Maven 安装方式，Rust 版仅检查 PATH。
-- **pom.xml 读取失败降级**：`detectJavaVersion` 读取 `pom.xml` 失败时打印警告并调用 `FindAnyJDK()` 兜底，不中断构建流程；Rust 版直接 `bail!` 报错。（注：该降级为设计取舍，见 §7 风险 5）
+- ~~**pom.xml 读取失败降级**~~ **✅ 已改为报错**：原实现读取 `pom.xml` 失败时打印警告并调用 `FindAnyJDK()` 兜底；现已改为直接返回错误（fail-fast），与 Rust 版 `bail!` 行为对齐（见 §7 风险 5）。
 - **更丰富的搜索路径**：JDK 搜索覆盖 JetBrains Toolbox、Snap（Linux）、SDKMAN、Jabba、Zulu、Temurin、Adoptium、Amazon Corretto、Microsoft Build 等；Maven 搜索覆盖 JetBrains Toolbox、Snap、SDKMAN、Scoop、Chocolatey、Apache 官方路径等。每 OS 约 15-20 个路径（Rust 约 3-5 个）。
 
 ### 4.3 并发与错误处理
@@ -67,7 +67,7 @@ Rust 版将全部 Java 编译链路（JDK 探测、Maven 探测、pom.xml 解析
 ### 4.4 上传与 SSH
 
 - **SFTP 协议**：基于 `golang.org/x/crypto/ssh` + `github.com/pkg/sftp`，支持 `MkdirAll` 自动创建远程目录、`Stat` 检查文件存在性；备份通过 `Remove` + `Rename` 两步操作实现（非原子，见 §7 风险 6），最终以 `Rename` 将临时文件移动到目标路径实现原子上线。
-- **SSHClient 结构体封装**：封装 `ssh.Client` 作为持久连接，`ExecuteCommand`/`KillProcess` 等方法通过 `client.NewSession()` 按需创建 session 并以 `defer` 管理生命周期。（注：结构体中声明的 `session` 字段当前未被赋值，属可清理的死字段）
+- **SSHClient 结构体封装**：封装 `ssh.Client` 作为持久连接，`ExecuteCommand`/`KillProcess` 等方法通过 `client.NewSession()` 按需创建 session 并以 `defer` 管理生命周期。（原结构体中声明的 `session` 死字段已清理）
 - **TestConnection 函数**：独立的 SSH 连通性测试（先 TCP Dial 再 SSH 认证）。
 - **30 秒连接超时**：`ssh.Dial` 配置 `Timeout=30s`，自动补全缺失的 `:22` 端口。
 - **流式文件读取**：`UploadFile` 使用 `os.Open` + `io.Copy` 流式读取，大文件不占内存，每次重试重新打开文件。
@@ -160,14 +160,14 @@ Rust 版将全部 Java 编译链路（JDK 探测、Maven 探测、pom.xml 解析
 3. ~~**KillProcess 静默吞错**~~ **✅ 已修复**：`findPidCmd` 末尾添加 `|| true` 兜底退出码，`err != nil` 时通过 `fmt.Errorf("...: %w", err)` 向上传播，不再误判为"无进程可杀"而跳过停服导致双实例运行（`upload/ssh.go`）。
 4. ~~**文件读取完整性校验缺失**~~ **✅ 已修复**：`UploadFile` 已捕获 `io.Copy` 写入字节数，与 `os.Stat` 的 `fileSize` 比对，不一致时报错，防止静默上传不完整文件（`upload/ssh.go`）。
 
-### 🔴 高风险（设计取舍，待评估）
+### ✅ 已调整的高风险（原 5）
 
-5. **pom.xml 读取失败降级风险**：Go 版在 `pom.xml` 不可读时降级为 `FindAnyJDK()` 使用任意可用 JDK，可能使用了与项目要求不符的 JDK 版本（如项目要求 Java 17 但找到 Java 8），导致编译失败或运行时兼容性问题。Rust 版在此场景直接报错，更严格但更安全。此为设计取舍，非代码缺陷。
+5. ~~**pom.xml 读取失败降级风险**~~ **✅ 已改为报错**：`detectJavaVersion` 读取 `pom.xml` 失败时不再降级到 `FindAnyJDK()`，而是直接返回错误（fail-fast），与 Rust 版行为对齐，避免误用与项目要求不符的 JDK 版本（如项目要求 Java 17 却用 Java 8）导致编译/运行时问题。
 
 ### 🟡 中等风险（建议评估）
 
 6. **SFTP 备份竞态条件**：Go 版使用 `sftpClient.Remove(backupPath)` + `sftpClient.Rename(remotePath, backupPath)` 两步操作完成备份，非原子，两步之间若有其他部署流程介入存在竞态。Rust 版通过 shell 命令 `rm -rf {backup}.bak && mv {remote} {backup}.bak` 同样为两步（亦非严格原子）。
-7. **errChan 缓冲区固定为 100**：极端情况下（大量环境 + 模块同时部署失败）可能阻塞，建议改为无缓冲 channel 或动态扩容策略。
+7. ~~**errChan 缓冲区固定为 100**~~ **✅ 已修复（缓冲=任务总数）**：`deploy` 层先收集有效任务到切片，`errChan` 缓冲设为 `len(tasks)`；每个 goroutine 至多发送 1 个错误后即返回，缓冲永远够用，既不阻塞 goroutine 也不丢失错误。（注：原"改为无缓冲"的建议不可取——发送发生在 `wg.Wait()`/`close()` 之前、此时无接收方，无缓冲会必然死锁。）
 8. **部署层错误收集后继续执行**：Go 版收集所有 goroutine 错误后继续执行剩余步骤，可能掩盖部分失败但保证整体流程完整；Rust 版在线程内直接 `eprintln!` 并 `return`，同样不传播但更早放弃当前模块。
 
 ### 🟢 低风险（可接受或需关注）
@@ -176,7 +176,7 @@ Rust 版将全部 Java 编译链路（JDK 探测、Maven 探测、pom.xml 解析
 10. ~~**缺失 ProgressWriter 速率/ETA 展示**~~ **✅ 已覆盖**：`progressbar v3.14.1` 在 `OptionShowBytes(true)` 下默认显示传输速率与剩余时间 ETA，并配置 `OptionThrottle(500ms)` 节流刷新。Rust 版仍以「当前速度+平均速度」双指标略胜。
 11. **错误链 ergonomics 差异**：Go 关键路径已用 `%w` 保留可解包错误链，`errors.Is/As` 可追溯根因，但 `UploadFile` 等函数仍有 `%v` 残留导致局部链断裂；此外 Rust 版 `anyhow` `.context()` 自动上下文附加的便捷性仍无直接等价物，调试时上下文仍需手动拼接。
 12. **SSH 连接超时行为差异**：Go 版显式配置 30s 超时，Rust 版依赖 OS 默认 TCP 超时（可能无限阻塞）。若服务器响应慢，Rust 版可能 hanging。
-13. **MkdirAll 忽略目录已存在错误**：Go 版 `sftpClient.MkdirAll(remoteDir)` 忽略 `err != nil && !errors.Is(err, os.ErrExist)` 之外的其他错误，若 SFTP 连接异常导致 `MkdirAll` 失败，后续上传可能静默失败。
+13. ~~**MkdirAll 忽略目录已存在错误**~~ **✅ 已修复**：`UploadFile` 中 `MkdirAll` 现仅容忍 `os.ErrExist`，其余错误（权限不足、SFTP 连接异常等）通过 `%w` 向上传播，不再静默失败导致后续上传出错。
 14. **每次重试重新读取文件**：对大文件增加磁盘 IO 开销，且若文件在重试间隙被修改可能导致版本不一致。
 15. **远程路径 Windows 分隔符处理差异**：Go 版 `filepath.Join` 后 `ReplaceAll("\\", "/")`，在 Windows 本地运行时与 Rust 版（始终用 `/`）存在差异，但最终结果一致。
 
@@ -197,7 +197,7 @@ Go 重写版完整还原了 Rust 原版的核心业务逻辑（Java 编译、Vue
 - 交叉编译更简单（环境变量 vs `.cargo/config.toml`）
 - 外部依赖更少（5 个 vs 11 个）
 
-初版报告指出的 3 个高风险 bug（JAVA_HOME 注入、UploadZipOnly 后缀处理、KillProcess 静默吞错）和 1 个功能缺失（文件完整性校验）**已全部修复**；并发输出锁、错误链保留、统一上传重试、进度条节流等 P2/P3 改进也已落地。剩余的 pom.xml 降级策略（设计取舍）、SFTP 备份两步操作、`errChan` 缓冲等中低风险点不阻塞生产使用，可按需逐步完善。
+初版报告指出的 3 个高风险 bug（JAVA_HOME 注入、UploadZipOnly 后缀处理、KillProcess 静默吞错）和 1 个功能缺失（文件完整性校验）**已全部修复**；并发输出锁、错误链保留、统一上传重试、进度条节流等 P2/P3 改进也已落地。本轮另完成错误链 `%v→%w` 全量统一、`session` 死字段清理、`MkdirAll` 吞错修复，并将 pom.xml 降级改为报错、`errChan` 缓冲改为任务总数（§8.3）。剩余的 SFTP 备份两步操作等少量低风险点不阻塞生产使用，可按需逐步完善。
 
 ### 8.2 优先完善清单（✅ 全部已完成）
 
@@ -212,12 +212,14 @@ Go 重写版完整还原了 Rust 原版的核心业务逻辑（Java 编译、Vue
 7. ~~【P2】统一上传重试逻辑~~ **✅ 已完成**：新增 `SSHClient.uploadWithRetry` 共享方法，`UploadAndRunJar`/`UploadJarOnly` 原重复重试循环改为调用它，`UploadZipOnly`/`UploadAndExtractZip`（原单次上传）也接入重试（`upload/ssh.go`）。
 8. ~~【P3】考虑 Rust 版 ProgressWriter 的速率/ETA 统计~~ **✅ 已完成**：`UploadFile` 进度条配置 `OptionThrottle(500ms)` 节流刷新，与 Rust 版刷新频率对齐；`progressbar v3.14.1` 在 `OptionShowBytes(true)` 下已内置传输速率与剩余时间显示。
 
-### 8.3 后续可选优化（非阻塞）
+### 8.3 后续可选优化（✅ 本轮已全部完成）
 
-- 将 `UploadFile` 等函数中残留的 `%v` 错误包装统一为 `%w`，使错误链全程可解包。
-- 清理 `SSHClient` 中未被赋值的 `session` 死字段。
-- 评估 pom.xml 失败时是否改为报错（与 Rust 版一致）而非降级到任意 JDK。
-- 评估 `errChan` 缓冲 100 是否需改为无缓冲或动态扩容。
+下列各项在 `go` 分支本轮修复中逐项落地：
+
+1. ~~将 `UploadFile` 等函数中残留的 `%v` 错误包装统一为 `%w`~~ **✅ 已完成**：upload/compiler/config/deploy 包内对应 `err` 的 `%v` 统一改为 `%w`（仅保留 `build.go`、`ssh.go` 中 `%v` 实为 `time.Duration` 的 3 处），错误链全程可 `errors.Is/As` 解包。
+2. ~~清理 `SSHClient` 中未被赋值的 `session` 死字段~~ **✅ 已完成**：删除 `SSHClient.session` 字段及 `Close()` 中恒为 false 的判空分支。
+3. ~~评估 pom.xml 失败时是否改为报错~~ **✅ 已完成（改为报错）**：`detectJavaVersion` 读取 `pom.xml` 失败不再降级到 `FindAnyJDK()`，直接返回错误（fail-fast），与 Rust 版一致。
+4. ~~评估 `errChan` 缓冲 100 是否需改为无缓冲或动态扩容~~ **✅ 已完成（缓冲=任务总数）**：`errChan` 缓冲改为 `len(tasks)`（先收集任务再启动）。说明：原报告"改为无缓冲"的建议不可取——发送发生在 `wg.Wait()`/`close()` 之前、此时无接收方，无缓冲会必然死锁，故采用"缓冲=任务总数"。
 
 ---
 

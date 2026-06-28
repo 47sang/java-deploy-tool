@@ -213,12 +213,14 @@ func (c *SSHClient) UploadFile(localPath, remotePath string, showProgress bool) 
 
 // KillProcess 杀死远程服务器上的进程
 func (c *SSHClient) KillProcess(jarPath, env string) error {
-	// 获取进程 ID
-	findPidCmd := fmt.Sprintf("ps -ef | grep %s | grep -v grep | awk '{print $2}'", jarPath)
+	// 查找进程 PID。"|| true" 兜底确保命令退出码恒为 0（grep 无匹配时退出码 1），
+	// 使下方的 err 只代表真实执行异常（超时/SSH 会话失败等），可安全向上传播。
+	// 原实现直接 return nil 会把这类异常误判为"无进程可杀"，跳过停服步骤，可能在
+	// 启动新进程时造成双实例运行。
+	findPidCmd := fmt.Sprintf("ps -ef | grep %s | grep -v grep | awk '{print $2}' || true", jarPath)
 	pids, err := c.ExecuteCommand(findPidCmd)
 	if err != nil {
-		// 如果命令失败，可能是没有找到进程
-		return nil
+		return fmt.Errorf("查找进程失败 %s: %w", jarPath, err)
 	}
 
 	pids = strings.TrimSpace(pids)

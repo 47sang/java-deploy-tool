@@ -158,6 +158,10 @@ func (c *SSHClient) UploadFile(localPath, remotePath string, showProgress bool) 
 			progressbar.OptionShowBytes(true),
 			progressbar.OptionSetWidth(40),
 			progressbar.OptionSetDescription("上传中"),
+			// 节流刷新至每 500ms 一次：对齐 Rust 版 ProgressWriter 的刷新频率，
+			// 让传输速率/剩余时间统计更稳定，并减少大文件上传时的终端写入开销。
+			// progressbar 在 OptionShowBytes 模式下已内置传输速率与剩余时间显示。
+			progressbar.OptionThrottle(500 * time.Millisecond),
 			progressbar.OptionSetTheme(progressbar.Theme{
 				Saucer:        "[green]=[reset]",
 				SaucerHead:    "[green]>[reset]",

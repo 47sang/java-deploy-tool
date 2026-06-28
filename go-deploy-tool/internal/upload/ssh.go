@@ -14,7 +14,6 @@ import (
 	"deploy-tool/pkg/utils"
 
 	"github.com/pkg/sftp"
-	"github.com/schollz/progressbar/v3"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -104,8 +103,11 @@ func (c *SSHClient) executeCommandWithTimeout(command string, timeoutDur time.Du
 	return string(output), nil
 }
 
-// UploadFile 上传文件到远程服务器
-func (c *SSHClient) UploadFile(localPath, remotePath string, showProgress bool) error {
+// UploadFile 上传文件到远程服务器。
+// label 用作进度条行首标签（通常为 "文件名(环境)"）；sink 非 nil 时在上传过程中展示
+// 进度（由调用方注入具体的 ProgressSink，如 deploy 层的 mpb 多进度条容器），sink 为 nil
+// 时不展示进度。
+func (c *SSHClient) UploadFile(localPath, remotePath, label string, sink ProgressSink) error {
 	// 读取本地文件
 	localFile, err := os.Open(localPath)
 	if err != nil {
@@ -147,38 +149,24 @@ func (c *SSHClient) UploadFile(localPath, remotePath string, showProgress bool) 
 	}
 	defer remoteFile.Close()
 
-	// 使用进度条
-	var reader io.Reader = localFile
-	if showProgress {
-		bar := progressbar.NewOptions64(
-			fileSize,
-			progressbar.OptionEnableColorCodes(true),
-			progressbar.OptionShowBytes(true),
-			progressbar.OptionSetWidth(40),
-			progressbar.OptionSetDescription("上传中"),
-			// 节流刷新至每 500ms 一次：对齐 Rust 版 ProgressWriter 的刷新频率，
-			// 让传输速率/剩余时间统计更稳定，并减少大文件上传时的终端写入开销。
-			// progressbar 在 OptionShowBytes 模式下已内置传输速率与剩余时间显示。
-			progressbar.OptionThrottle(500 * time.Millisecond),
-			progressbar.OptionSetTheme(progressbar.Theme{
-				Saucer:        "[green]=[reset]",
-				SaucerHead:    "[green]>[reset]",
-				SaucerPadding: " ",
-				BarStart:      "[",
-				BarEnd:        "]",
-			}),
-		)
-		reader = io.TeeReader(localFile, bar)
+	// 上传目标写入器：默认直接写远程文件；若调用方注入了 ProgressSink，则包装为
+	// "写入即推进进度"的 writer（多文件并发时各进度条由 sink 内部的容器统一渲染）。
+	// finish 句柄在上传结束后必须调用一次，用于标记进度条完成或中止。
+	var writer io.Writer = remoteFile
+	finish := func(error) {}
+	if sink != nil {
+		writer, finish = sink.Track(remoteFile, fileSize, label)
 	}
 
 	// 写入文件（受上传超时约束；超时则关闭远程文件句柄以中断阻塞的 io.Copy）
 	var copied int64
 	copyErr := timeout.RunWithTimeout(timeout.UploadTimeout, func() error {
 		var e error
-		copied, e = io.Copy(remoteFile, reader)
+		copied, e = io.Copy(writer, localFile)
 		return e
 	}, func() { remoteFile.Close() })
 	if copyErr != nil {
+		finish(copyErr) // 失败：中止进度条，避免进度容器在收尾时永久阻塞
 		if errors.Is(copyErr, timeout.ErrTimeout) {
 			return fmt.Errorf("文件上传超时 %s（上限 %v）: %w", localPath, timeout.UploadTimeout, timeout.ErrTimeout)
 		}
@@ -187,9 +175,11 @@ func (c *SSHClient) UploadFile(localPath, remotePath string, showProgress bool) 
 	// 完整性校验：实际写入字节数须与本地文件大小一致。若本地文件在上传过程中被截断
 	// 或修改，io.Copy 会读到提前 EOF 并以 nil 错误返回，导致静默上传不完整的文件。
 	if copied != fileSize {
+		finish(fmt.Errorf("文件上传不完整")) // 不完整同样视为未完成，中止进度条
 		return fmt.Errorf("文件上传不完整: 已写入 %d 字节，预期 %d 字节（本地文件 %s）",
 			copied, fileSize, localPath)
 	}
+	finish(nil) // 成功：标记进度条完成
 
 	fmt.Printf("\n文件上传完成: %s\n", tempRemotePath)
 
@@ -224,14 +214,14 @@ func (c *SSHClient) UploadFile(localPath, remotePath string, showProgress bool) 
 // 成功返回 nil；全部失败则返回包装了最后一次错误的错误。供 UploadAndRunJar 等
 // 顶层上传函数复用，消除原先各自重复实现的重试循环；重试日志使用并发安全的
 // SafePrintf，避免多环境并发部署时输出交错。
-func (c *SSHClient) uploadWithRetry(localPath, remotePath string) error {
+func (c *SSHClient) uploadWithRetry(localPath, remotePath, label string, sink ProgressSink) error {
 	var uploadErr error
 	for attempt := 0; attempt < MaxRetries; attempt++ {
 		if attempt > 0 {
 			utils.SafePrintf("尝试重新上传文件 (第%d次重试)...\n", attempt)
 			time.Sleep(RetryDelay)
 		}
-		uploadErr = c.UploadFile(localPath, remotePath, true)
+		uploadErr = c.UploadFile(localPath, remotePath, label, sink)
 		if uploadErr == nil {
 			return nil
 		}
@@ -352,8 +342,8 @@ func (c *SSHClient) UnzipRemote(zipPath, extractDir string) error {
 	return nil
 }
 
-// UploadAndRunJar 上传并运行 JAR 包
-func UploadAndRunJar(server, username, password, localPath, remotePath, javaPath, env string) error {
+// UploadAndRunJar 上传并运行 JAR 包。label/sink 透传给进度展示（见 UploadFile）。
+func UploadAndRunJar(server, username, password, localPath, remotePath, javaPath, env, label string, sink ProgressSink) error {
 	// 读取本地文件
 	fileInfo, err := os.Stat(localPath)
 	if err != nil {
@@ -371,7 +361,7 @@ func UploadAndRunJar(server, username, password, localPath, remotePath, javaPath
 	defer client.Close()
 
 	// 上传文件（带重试）
-	if err := client.uploadWithRetry(localPath, remotePath); err != nil {
+	if err := client.uploadWithRetry(localPath, remotePath, label, sink); err != nil {
 		return err
 	}
 
@@ -391,8 +381,8 @@ func UploadAndRunJar(server, username, password, localPath, remotePath, javaPath
 	return nil
 }
 
-// UploadJarOnly 仅上传 JAR 文件
-func UploadJarOnly(server, username, password, localPath, remotePath string) error {
+// UploadJarOnly 仅上传 JAR 文件。label/sink 透传给进度展示（见 UploadFile）。
+func UploadJarOnly(server, username, password, localPath, remotePath, label string, sink ProgressSink) error {
 	// 读取本地文件
 	fileInfo, err := os.Stat(localPath)
 	if err != nil {
@@ -410,7 +400,7 @@ func UploadJarOnly(server, username, password, localPath, remotePath string) err
 	defer client.Close()
 
 	// 上传文件（带重试）
-	if err := client.uploadWithRetry(localPath, remotePath); err != nil {
+	if err := client.uploadWithRetry(localPath, remotePath, label, sink); err != nil {
 		return err
 	}
 
@@ -420,8 +410,8 @@ func UploadJarOnly(server, username, password, localPath, remotePath string) err
 	return nil
 }
 
-// UploadZipOnly 仅上传 ZIP 文件
-func UploadZipOnly(server, username, password, localPath, remotePath string) error {
+// UploadZipOnly 仅上传 ZIP 文件。label/sink 透传给进度展示（见 UploadFile）。
+func UploadZipOnly(server, username, password, localPath, remotePath, label string, sink ProgressSink) error {
 	// 读取本地文件
 	fileInfo, err := os.Stat(localPath)
 	if err != nil {
@@ -442,7 +432,7 @@ func UploadZipOnly(server, username, password, localPath, remotePath string) err
 	remoteZipPath := strings.TrimSuffix(remotePath, ".zip")
 
 	// 上传文件（带重试）
-	if err := client.uploadWithRetry(localPath, remoteZipPath); err != nil {
+	if err := client.uploadWithRetry(localPath, remoteZipPath, label, sink); err != nil {
 		return err
 	}
 
@@ -452,8 +442,8 @@ func UploadZipOnly(server, username, password, localPath, remotePath string) err
 	return nil
 }
 
-// UploadAndExtractZip 上传并解压 ZIP 文件
-func UploadAndExtractZip(server, username, password, localPath, remotePath string) error {
+// UploadAndExtractZip 上传并解压 ZIP 文件。label/sink 透传给进度展示（见 UploadFile）。
+func UploadAndExtractZip(server, username, password, localPath, remotePath, label string, sink ProgressSink) error {
 	// 读取本地文件
 	fileInfo, err := os.Stat(localPath)
 	if err != nil {
@@ -480,7 +470,7 @@ func UploadAndExtractZip(server, username, password, localPath, remotePath strin
 	}
 
 	// 上传 ZIP 文件（带重试）
-	if err := client.uploadWithRetry(localPath, remoteZipPath); err != nil {
+	if err := client.uploadWithRetry(localPath, remoteZipPath, label, sink); err != nil {
 		return err
 	}
 

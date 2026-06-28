@@ -6,7 +6,7 @@
 
 Go 重写版在核心功能上**与 Rust 原版基本对等**，完整还原了 CLI 解析、配置管理、Java/Vue 编译链路、ZIP 打包、SFTP 上传、进程管理等全部主流程；同时通过拆分 `internal/discovery` 与 `internal/timeout` 包、引入错误聚合与输出互斥机制、扩展 JDK/Maven 搜索路径、统一上传重试等方式，在可维护性、环境适应性与可靠性上有所增强。
 
-初版报告中标记的精细化进度展示、文件完整性校验、JAVA_HOME 注入、UploadZipOnly 后缀、KillProcess 错误传播、并发输出交错、错误链、统一重试等问题**已在 `go` 分支全部修复**（详见 §8.2）。本轮另完成错误链 `%v→%w` 统一、`SSHClient.session` 死字段清理、`MkdirAll` 静默吞错修复，并将 pom.xml 降级改为报错、`errChan` 缓冲改为任务总数（详见 §8.3）。当前仅余 SFTP 备份两步操作的非原子性等少量低风险点供后续评估。
+初版报告中标记的精细化进度展示、文件完整性校验、JAVA_HOME 注入、UploadZipOnly 后缀、KillProcess 错误传播、并发输出交错、错误链、统一重试等问题**已在 `go` 分支全部修复**（详见 §8.2）。本轮另完成错误链 `%v→%w` 统一、`SSHClient.session` 死字段清理、`MkdirAll` 静默吞错修复，并将 pom.xml 降级改为报错、`errChan` 缓冲改为任务总数（详见 §8.3）。本轮另完成并发上传进度条改造：引入 `vbauerster/mpb/v8` 多进度条容器，根治多文件并发上传时进度条互相交错的问题，与 Rust 版 `MultiProgress` 体验对齐（详见 §8.4）。当前仅余 SFTP 备份两步操作的非原子性等少量低风险点供后续评估。
 
 ---
 
@@ -29,13 +29,13 @@ Rust 版将全部 Java 编译链路（JDK 探测、Maven 探测、pom.xml 解析
 
 | 序号 | 功能维度 | 对等程度 | 核心差异一句话 |
 |------|----------|----------|----------------|
-| 1 | 入口与整体编排 | 🟡 基本对等 | CLI 框架从 `clap` 切换为 `cobra`，并发模型从 `thread::spawn` 改为 `sync.WaitGroup` + error channel，上传层剥离 MultiProgress 进度条参数 |
+| 1 | 入口与整体编排 | 🟡 基本对等 | CLI 框架从 `clap` 切换为 `cobra`，并发模型从 `thread::spawn` 改为 `sync.WaitGroup` + error channel，上传层通过 `ProgressSink` 接口解耦进度展示（实现为 `mpb` 多进度条容器，对标 Rust 版 `MultiProgress`） |
 | 2 | 配置模型 | 🟢 完全对等 | Go 版通过 `GetJarFilesList()` 方法封装了 `jar_files` 多态归一化逻辑，消除了 Rust 版 `deploy.rs` 中的代码重复；其余字段语义完全一致 |
 | 3 | Java 编译链路 | 🟢 完全对等 | Go 版增强了 Maven/JDK 发现能力（Maven Wrapper、MAVEN_HOME/M2_HOME、更广搜索路径、pom.xml 失败兜底）；JAVA_HOME 注入已通过 `overrideEnv` 修复，无重复 key；Java 8 的 `1.8` XML 变体 Go 版反而更完善 |
 | 4 | Vue 编译链路 | 🟢 完全对等 | Go 版新增 Node.js 预检函数 `CheckNodeJS` 与并发错误收集机制；`UploadZipOnly` 的 `.zip` 后缀去除逻辑已修复，与 Rust 版一致 |
 | 5 | 打包 zip | 🟡 基本对等 | Go 版使用流式 `io.Copy` 内存效率更高，但 `filepath.Walk` 遇到错误直接中止遍历，无 Rust 版 `filter_map(Result::ok)` 的跳过容错机制 |
 | 6 | 部署逻辑 | 🟡 基本对等 | Go 版改用 SFTP 原生操作实现备份与移动，并发错误可聚合返回；文件读取完整性校验与 KillProcess 错误传播均已补齐 |
-| 7 | 上传与 SSH | 🟡 基本对等 | Go 版基于 SFTP 协议，提供连接超时、自动目录创建、SSHClient 结构体封装，progressbar 内置速率/ETA 显示；Rust 版基于 SCP 协议，提供自定义 ProgressWriter（含当前/平均速度）与 MultiProgress 并发进度条 |
+| 7 | 上传与 SSH | 🟡 基本对等 | Go 版基于 SFTP 协议，提供连接超时、自动目录创建、SSHClient 结构体封装，并以 `mpb` 实现多进度条并发渲染（含速率/ETA）；Rust 版基于 SCP 协议，提供自定义 ProgressWriter（含当前/平均速度）与 MultiProgress 并发进度条。上传协议不同（SFTP vs SCP），并发进度展示能力已对齐 |
 | 8 | 工具函数与错误处理风格 | 🟡 基本对等 | Go 版工具函数更集中封装，带 emoji 输出与并发安全锁；关键路径已改用 `%w` 保留错误链，Rust 版仍以 `anyhow` 链式 `.context()` 的便捷性见长 |
 
 > **图例**：🟢 完全对等  🟡 基本对等  🔴 存在差异
@@ -88,8 +88,8 @@ Rust 版将全部 Java 编译链路（JDK 探测、Maven 探测、pom.xml 解析
 | 缺失项 | 影响程度 | 说明 |
 |--------|----------|------|
 | ✅ **文件读取完整性校验（已修复）** | 原 🔴 高 | 初版 `UploadFile` 仅通过 `os.Stat` 获取大小用于日志，不校验实际读取字节数。现已在 `io.Copy` 后校验 `copied == fileSize`，不一致时返回错误，防止静默上传不完整文件（`upload/ssh.go`）。 |
-| ✅ **ProgressWriter 速率/ETA 统计（已覆盖）** | 原 🟡 中 | 初版认为 `progressbar` 仅展示基础字节进度。实测 `progressbar v3.14.1` 在 `OptionShowBytes(true)` 下默认启用 `predictTime/elapsedTime`，已内置传输速率（如 MB/s）与剩余时间 ETA 显示，并配置 `OptionThrottle(500ms)` 对齐 Rust 版刷新频率。Rust 版 `ProgressWriter` 仍以「同时显示当前速度+平均速度」略胜，但 Go 版速率/ETA 能力已具备。 |
-| ⚠️ **MultiProgress 并发进度条（部分缓解）** | 🟡 中 | Rust 版 `indicatif` 的 `MultiProgress` 支持多线程共享统一进度条；Go 版 `progressbar` 不支持 `MultiProgress`。文本日志的并发交错已通过 `SafePrintf` 互斥锁解决，但多个 `progressbar` 实例的进度条视觉元素在并发上传时仍可能交错。 |
+| ✅ **ProgressWriter 速率/ETA 统计（已覆盖）** | 原 🟡 中 | 初版认为进度条仅展示基础字节进度。现采用 `mpb` 的 `decor.AverageSpeed`（MiB/s）+ `decor.AverageETA`（剩余时间）装饰器，基于已传字节与已用时长实时计算，速率/ETA 能力与 Rust 版 `ProgressWriter` 对齐（见 §8.4）。 |
+| ✅ **MultiProgress 并发进度条（已解决）** | 原 🟡 中 | Rust 版 `indicatif` 的 `MultiProgress` 支持多线程共享统一进度条。Go 版现已引入 `vbauerster/mpb/v8`，`deploy` 层为每次部署创建共享 `*mpb.Progress` 容器，每个上传 goroutine 注册独立进度条、由容器统一刷新，多文件并发上传时各占一行、互不交错，与 Rust 版体验对齐（见 §8.4）。 |
 | ✅ **JAVA_HOME 注入存在 bug（已修复）** | 原 🔴 高 | 初版使用 `append` 注入 `JAVA_HOME`，父进程已有该变量时产生重复 key，Unix 取第一个导致新值不生效。现已改用 `overrideEnv()` 先剔除同名条目再追加，确保唯一生效（`compiler/build.go`、`compiler/java.go`）。 |
 | ✅ **UploadZipOnly .zip 后缀处理缺陷（已修复）** | 原 🔴 高 | 初版 `TrimSuffix` 后紧跟恒为真的 `if` 回退，导致后缀实际未去除。现已删除该回退，`remoteZipPath` 直接使用 `TrimSuffix` 结果（`upload/ssh.go`）。 |
 | ✅ **KillProcess 静默吞错（已修复）** | 原 🔴 高 | 初版 `findPidCmd` 失败时 `return nil`，会把 SSH 异常误判为"无进程可杀"。现已在命令尾部加 `|| true` 兜底退出码，`err != nil` 时通过 `%w` 向上传播（`upload/ssh.go`）。 |
@@ -124,7 +124,7 @@ Rust 版将全部 Java 编译链路（JDK 探测、Maven 探测、pom.xml 解析
 | CLI 框架 | `clap` v4.4.11（builder 模式，`value_delimiter(',')`） | `cobra` v1.8.0（`StringSliceVarP` 原生支持逗号分隔） |
 | 配置解析 | `serde` + `toml` + `serde_json`（`Value` 多态） | `BurntSushi/toml`（`interface{}` + 类型断言） |
 | SSH 通信 | `ssh2`（libssh2 C 绑定，SCP 协议） | `golang.org/x/crypto/ssh` + `github.com/pkg/sftp`（纯 Go 实现，SFTP 协议） |
-| 进度条 | `indicatif`（`ProgressBar` + `MultiProgress`，自定义 `ProgressWriter`，含当前/平均速度与 ETA） | `schollz/progressbar/v3` v3.14.1（`OptionShowBytes` 内置速率/ETA 显示，`OptionThrottle(500ms)` 节流刷新；无 `MultiProgress`） |
+| 进度条 | `indicatif`（`ProgressBar` + `MultiProgress`，自定义 `ProgressWriter`，含当前/平均速度与 ETA） | `vbauerster/mpb/v8` v8.7.1（`*Progress` 容器 + `AddBar` + `ProxyWriter`；装饰器提供百分比/已传·总量/平均速率/ETA；多 bar 并发统一渲染，对标 `MultiProgress`） |
 | 错误处理 | `anyhow::Result<T>` + `.context()` + `bail!` | 原生 `error` 接口 + `fmt.Errorf`（关键路径用 `%w` 保留错误链） |
 | 时间处理 | `chrono`（`Local::now()`、格式化） | 标准库 `time`（`time.Now()`、`time.Since`） |
 | 目录遍历 | `walkdir` crate | 标准库 `filepath.Walk` |
@@ -145,7 +145,7 @@ Rust 版将全部 Java 编译链路（JDK 探测、Maven 探测、pom.xml 解析
 ### 6.4 外部依赖数量
 
 - **Rust 原版**：11 个外部 crate（`clap`、`ssh2`、`serde`、`serde_json`、`toml`、`indicatif`、`anyhow`、`walkdir`、`glob`、`zip`、`chrono`，见根 `Cargo.toml`）。
-- **Go 重写版**：5 个外部依赖（`cobra`、`golang.org/x/crypto/ssh`、`github.com/pkg/sftp`、`github.com/schollz/progressbar/v3`、`github.com/BurntSushi/toml`），其余使用标准库。
+- **Go 重写版**：5 个直接外部依赖（`cobra`、`golang.org/x/crypto/ssh`、`github.com/pkg/sftp`、`github.com/vbauerster/mpb/v8`、`github.com/BurntSushi/toml`），其余使用标准库。
 
 ---
 
@@ -172,8 +172,8 @@ Rust 版将全部 Java 编译链路（JDK 探测、Maven 探测、pom.xml 解析
 
 ### 🟢 低风险（可接受或需关注）
 
-9. **进度条无 MultiProgress 并发支持**：文本日志并发交错已通过 `SafePrintf` 互斥锁解决，但多个 `progressbar` 实例的进度条视觉元素在并发部署时仍可能交错，用户体验不如 Rust 版统一进度条。
-10. ~~**缺失 ProgressWriter 速率/ETA 展示**~~ **✅ 已覆盖**：`progressbar v3.14.1` 在 `OptionShowBytes(true)` 下默认显示传输速率与剩余时间 ETA，并配置 `OptionThrottle(500ms)` 节流刷新。Rust 版仍以「当前速度+平均速度」双指标略胜。
+9. ~~**进度条无 MultiProgress 并发支持**~~ **✅ 已解决（引入 `mpb` 多进度条容器）**：根因为每个上传文件各自创建 `progressbar` 实例、各自以 `\r` 直写终端同一行、缺少统一渲染层。现已由 `deploy` 层创建共享 `*mpb.Progress` 容器根治——每个上传 goroutine 在其中注册一条独立进度条，由容器后台线程统一刷新、各占一行，互不交错；行首「文件名(环境)」标签 + 百分比 + 已传·总量 + 平均速率（MiB/s）+ 剩余时间（ETA）。上传成功标记完成、失败调用 `bar.Abort` 防止容器收尾阻塞（见 §8.4）。
+10. ~~**缺失 ProgressWriter 速率/ETA 展示**~~ **✅ 已覆盖**：现采用 `mpb` 的 `decor.AverageSpeed`（MiB/s）+ `decor.AverageETA`（剩余时间）装饰器，基于已传字节与已用时长实时计算，与 Rust 版 `ProgressWriter` 的速率/ETA 能力对齐。
 11. **错误链 ergonomics 差异**：Go 关键路径已用 `%w` 保留可解包错误链，`errors.Is/As` 可追溯根因，但 `UploadFile` 等函数仍有 `%v` 残留导致局部链断裂；此外 Rust 版 `anyhow` `.context()` 自动上下文附加的便捷性仍无直接等价物，调试时上下文仍需手动拼接。
 12. **SSH 连接超时行为差异**：Go 版显式配置 30s 超时，Rust 版依赖 OS 默认 TCP 超时（可能无限阻塞）。若服务器响应慢，Rust 版可能 hanging。
 13. ~~**MkdirAll 忽略目录已存在错误**~~ **✅ 已修复**：`UploadFile` 中 `MkdirAll` 现仅容忍 `os.ErrExist`，其余错误（权限不足、SFTP 连接异常等）通过 `%w` 向上传播，不再静默失败导致后续上传出错。
@@ -210,7 +210,7 @@ Go 重写版完整还原了 Rust 原版的核心业务逻辑（Java 编译、Vue
 5. ~~【P1】抑制并发输出交错~~ **✅ 已完成**：`pkg/utils` 新增 `outputMu` + `SafePrintf`/`SafePrintln`，`Print*` 系列共享该锁，`deploy` 层并发 goroutine 状态行改用 `SafePrintf`；附 200 goroutine 并发测试（`utils.go`、`deploy/*.go`）。
 6. ~~【P2】增加 anyhow 风格的错误链或统一错误包装格式~~ **✅ 已完成**：`NewSSHClient` 连接失败补充服务器地址；SSH 会话/远程命令/SFTP 客户端/远程文件写入、Java 构建失败等关键步骤 `%v`→`%w` 保留错误链（`upload/ssh.go`、`compiler/java.go`）。
 7. ~~【P2】统一上传重试逻辑~~ **✅ 已完成**：新增 `SSHClient.uploadWithRetry` 共享方法，`UploadAndRunJar`/`UploadJarOnly` 原重复重试循环改为调用它，`UploadZipOnly`/`UploadAndExtractZip`（原单次上传）也接入重试（`upload/ssh.go`）。
-8. ~~【P3】考虑 Rust 版 ProgressWriter 的速率/ETA 统计~~ **✅ 已完成**：`UploadFile` 进度条配置 `OptionThrottle(500ms)` 节流刷新，与 Rust 版刷新频率对齐；`progressbar v3.14.1` 在 `OptionShowBytes(true)` 下已内置传输速率与剩余时间显示。
+8. ~~【P3】考虑 Rust 版 ProgressWriter 的速率/ETA 统计~~ **✅ 已完成**：初版为 `UploadFile` 配置 `OptionThrottle(500ms)` 节流刷新，`progressbar v3.14.1` 在 `OptionShowBytes(true)` 下内置传输速率与剩余时间显示；后于 §8.4 进一步升级为 `mpb` 的 `AverageSpeed`/`AverageETA` 装饰器方案。
 
 ### 8.3 后续可选优化（✅ 本轮已全部完成）
 
@@ -220,6 +220,24 @@ Go 重写版完整还原了 Rust 原版的核心业务逻辑（Java 编译、Vue
 2. ~~清理 `SSHClient` 中未被赋值的 `session` 死字段~~ **✅ 已完成**：删除 `SSHClient.session` 字段及 `Close()` 中恒为 false 的判空分支。
 3. ~~评估 pom.xml 失败时是否改为报错~~ **✅ 已完成（改为报错）**：`detectJavaVersion` 读取 `pom.xml` 失败不再降级到 `FindAnyJDK()`，直接返回错误（fail-fast），与 Rust 版一致。
 4. ~~评估 `errChan` 缓冲 100 是否需改为无缓冲或动态扩容~~ **✅ 已完成（缓冲=任务总数）**：`errChan` 缓冲改为 `len(tasks)`（先收集任务再启动）。说明：原报告"改为无缓冲"的建议不可取——发送发生在 `wg.Wait()`/`close()` 之前、此时无接收方，无缓冲会必然死锁，故采用"缓冲=任务总数"。
+
+### 8.4 并发上传进度条改造（引入 mpb，✅ 已完成）
+
+初版报告 §7 第 9 点指出的「多文件并发上传时进度条互相交错」问题已根治。根因：每个上传文件各自创建 `schollz/progressbar` 实例、各自以 `\r` 直写终端同一行、缺少统一渲染层——加全局锁也无法变为多行布局。本轮引入 `vbauerster/mpb/v8`（v8.7.1），对标 Rust 版 `indicatif::MultiProgress`。
+
+**改造方案（三层解耦）：**
+
+- **接口层** `internal/upload/progress.go`：定义 `ProgressSink` 接口，`Track(w io.Writer, total int64, name string) (io.Writer, func(error))`。`upload` 包只依赖标准库 `io`，不绑定具体进度库，便于传 `nil`（不显示进度）或注入 mock 单测。
+- **实现层** `internal/deploy/progress.go`：`mpbSink` 实现 `ProgressSink`，在共享 `*mpb.Progress` 容器中 `AddBar` 创建进度条，用 `bar.ProxyWriter` 包装远程文件写入器（`io.Copy` 写入即推进进度）；装饰器拼出行首「文件名(环境)」标签 + 百分比 + 已传·总量（`CountersKibiByte`）+ 平均速率（`AverageSpeed`，MiB/s）+ 剩余时间（`AverageETA`）。
+- **编排层** `internal/deploy/java.go`、`vue.go`：为一次部署创建共享 `mpb.New(mpb.WithWidth(64))` 容器并包成 `mpbSink` 传入每个 goroutine；`wg.Wait()` 后调用 `p.Wait()` 收尾刷新；结果性日志（成功/失败）统一推迟到 `p.Wait()` 之后打印，避免与进度条渲染交错。
+
+**关键工程细节：**
+
+- mpb 的 `*Bar` 不实现 `io.Writer`，须用 `bar.ProxyWriter(w)` 包装目标写入器；`io.Copy` 写包装后的 writer 时内部 `IncrBy(n)` 推进进度。
+- 上传失败时 `current < total`，bar 不会自动 complete，会令 `p.Wait()` 永久阻塞。故 `Track` 返回 `finish(err)` 句柄：成功 `finish(nil)`，失败 `finish(err)` 调 `bar.Abort` 解除阻塞。
+- 依赖版本选型：选用 `mpb/v8 v8.7.1`（声明 `go 1.17`、依赖 `x/sys v0.15.0`），与项目既有 `x/sys v0.15.0`、`go 1.21` 基线完全一致，避免引入版本升级；`schollz/progressbar/v3` 已从 `go.mod` 移除。
+
+**已知次要限制：** 纯多文件上传（`upload_only`）场景体验完美；「上传+重启」场景中 `ExecuteCommand` 打印的远程命令日志（`upload/ssh.go`）可能在上传完成后与静止进度条短暂交错，属独立次要问题，本轮未在范围内处理。
 
 ---
 

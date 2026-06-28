@@ -21,10 +21,16 @@ func DeployJavaProject(ctx context.Context, projectDir, configPath string, envir
 		return err
 	}
 
-	// 使用 WaitGroup 等待所有部署任务完成
-	var wg sync.WaitGroup
-	errChan := make(chan error, 100)
-
+	// 先收集所有有效部署任务，再统一启动 goroutine。errChan 缓冲设为任务总数：
+	// 每个 goroutine 至多发送 1 个错误（发送后立即 return），故缓冲永远够用，
+	// 既不会阻塞 goroutine 导致 wg.Wait() 死锁，也不会丢失错误。
+	type javaTask struct {
+		jarName string
+		jarPath string
+		env     string
+		cfg     *config.DeployConfig
+	}
+	var tasks []javaTask
 	for _, env := range environments {
 		cfg, err := config.FromFile(configPath, env)
 		if err != nil {
@@ -60,49 +66,56 @@ func DeployJavaProject(ctx context.Context, projectDir, configPath string, envir
 				jarPath = filepath.Join(projectDir, "target", jarName)
 			}
 
-			// 启动部署任务
-			wg.Add(1)
-			go func(jarName, jarPath, env string, cfg *config.DeployConfig) {
-				defer wg.Done()
-
-				remotePath := filepath.Join(cfg.RemoteBasePath, jarName)
-				// 统一使用 Unix 风格路径
-				remotePath = strings.ReplaceAll(remotePath, "\\", "/")
-
-				// 确定是否仅上传
-				finalUploadOnly := uploadOnly || cfg.UploadOnly
-
-				if finalUploadOnly {
-					utils.SafePrintf("开始上传 %s 到 %s 环境\n", jarName, env)
-					if err := upload.UploadJarOnly(
-						cfg.Server,
-						cfg.Username,
-						cfg.Password,
-						jarPath,
-						remotePath,
-					); err != nil {
-						errChan <- fmt.Errorf("上传失败 %s (%s环境): %v", jarName, env, err)
-						return
-					}
-					utils.SafePrintf("上传成功: %s (%s环境)\n", jarName, env)
-				} else {
-					utils.SafePrintf("开始部署 %s 到 %s 环境\n", jarName, env)
-					if err := upload.UploadAndRunJar(
-						cfg.Server,
-						cfg.Username,
-						cfg.Password,
-						jarPath,
-						remotePath,
-						cfg.JavaPath,
-						env,
-					); err != nil {
-						errChan <- fmt.Errorf("部署失败 %s (%s环境): %v", jarName, env, err)
-						return
-					}
-					utils.SafePrintf("部署成功: %s (%s环境)\n", jarName, env)
-				}
-			}(jarName, jarPath, env, cfg)
+			tasks = append(tasks, javaTask{jarName: jarName, jarPath: jarPath, env: env, cfg: cfg})
 		}
+	}
+
+	// 使用 WaitGroup 等待所有部署任务完成
+	var wg sync.WaitGroup
+	errChan := make(chan error, len(tasks))
+
+	for _, t := range tasks {
+		wg.Add(1)
+		go func(t javaTask) {
+			defer wg.Done()
+
+			remotePath := filepath.Join(t.cfg.RemoteBasePath, t.jarName)
+			// 统一使用 Unix 风格路径
+			remotePath = strings.ReplaceAll(remotePath, "\\", "/")
+
+			// 确定是否仅上传
+			finalUploadOnly := uploadOnly || t.cfg.UploadOnly
+
+			if finalUploadOnly {
+				utils.SafePrintf("开始上传 %s 到 %s 环境\n", t.jarName, t.env)
+				if err := upload.UploadJarOnly(
+					t.cfg.Server,
+					t.cfg.Username,
+					t.cfg.Password,
+					t.jarPath,
+					remotePath,
+				); err != nil {
+					errChan <- fmt.Errorf("上传失败 %s (%s环境): %w", t.jarName, t.env, err)
+					return
+				}
+				utils.SafePrintf("上传成功: %s (%s环境)\n", t.jarName, t.env)
+			} else {
+				utils.SafePrintf("开始部署 %s 到 %s 环境\n", t.jarName, t.env)
+				if err := upload.UploadAndRunJar(
+					t.cfg.Server,
+					t.cfg.Username,
+					t.cfg.Password,
+					t.jarPath,
+					remotePath,
+					t.cfg.JavaPath,
+					t.env,
+				); err != nil {
+					errChan <- fmt.Errorf("部署失败 %s (%s环境): %w", t.jarName, t.env, err)
+					return
+				}
+				utils.SafePrintf("部署成功: %s (%s环境)\n", t.jarName, t.env)
+			}
+		}(t)
 	}
 
 	// 等待所有任务完成

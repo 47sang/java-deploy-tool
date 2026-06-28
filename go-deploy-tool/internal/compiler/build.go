@@ -38,15 +38,15 @@ func runBuildCommand(ctx context.Context, name string, args []string, dir string
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return "", fmt.Errorf("无法获取标准输出管道: %v", err)
+		return "", fmt.Errorf("无法获取标准输出管道: %w", err)
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return "", fmt.Errorf("无法获取标准错误管道: %v", err)
+		return "", fmt.Errorf("无法获取标准错误管道: %w", err)
 	}
 
 	if err := cmd.Start(); err != nil {
-		return "", fmt.Errorf("无法启动构建命令: %v", err)
+		return "", fmt.Errorf("无法启动构建命令: %w", err)
 	}
 
 	// 实时打印 stdout（不累积，构建成功时无需保留）

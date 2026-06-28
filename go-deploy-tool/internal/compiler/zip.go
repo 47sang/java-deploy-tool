@@ -14,7 +14,7 @@ func ZipDir(srcDir, destZip string) error {
 	// 确保源目录存在
 	info, err := os.Stat(srcDir)
 	if err != nil {
-		return fmt.Errorf("源目录不存在: %v", err)
+		return fmt.Errorf("源目录不存在: %w", err)
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("源路径不是一个目录: %s", srcDir)
@@ -23,7 +23,7 @@ func ZipDir(srcDir, destZip string) error {
 	// 创建 zip 文件
 	zipFile, err := os.Create(destZip)
 	if err != nil {
-		return fmt.Errorf("创建zip文件失败: %v", err)
+		return fmt.Errorf("创建zip文件失败: %w", err)
 	}
 	defer zipFile.Close()
 
@@ -44,7 +44,7 @@ func ZipDir(srcDir, destZip string) error {
 		// 计算相对路径
 		relPath, err := filepath.Rel(srcDir, path)
 		if err != nil {
-			return fmt.Errorf("计算相对路径失败: %v", err)
+			return fmt.Errorf("计算相对路径失败: %w", err)
 		}
 
 		// 替换 Windows 路径分隔符为 ZIP 标准的 /
@@ -62,7 +62,7 @@ func ZipDir(srcDir, destZip string) error {
 		// 创建文件头
 		header, err := zip.FileInfoHeader(info)
 		if err != nil {
-			return fmt.Errorf("创建文件头失败: %v", err)
+			return fmt.Errorf("创建文件头失败: %w", err)
 		}
 		header.Name = zipPath
 		header.Method = zip.Deflate
@@ -70,18 +70,18 @@ func ZipDir(srcDir, destZip string) error {
 		// 写入文件
 		writer, err := zipWriter.CreateHeader(header)
 		if err != nil {
-			return fmt.Errorf("添加文件到ZIP失败: %v", err)
+			return fmt.Errorf("添加文件到ZIP失败: %w", err)
 		}
 
 		file, err := os.Open(path)
 		if err != nil {
-			return fmt.Errorf("打开文件失败: %v", err)
+			return fmt.Errorf("打开文件失败: %w", err)
 		}
 		defer file.Close()
 
 		_, err = io.Copy(writer, file)
 		if err != nil {
-			return fmt.Errorf("写入ZIP失败: %v", err)
+			return fmt.Errorf("写入ZIP失败: %w", err)
 		}
 
 		return nil

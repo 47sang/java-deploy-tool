@@ -63,13 +63,10 @@ func detectJavaVersion(projectDir string) (string, error) {
 
 	content, err := os.ReadFile(pomPath)
 	if err != nil {
-		// 如果读取 pom.xml 失败，尝试查找任意可用的 JDK
-		utils.PrintWarning("无法读取pom.xml文件，将使用默认JDK")
-		jdkInfo, err := discovery.FindAnyJDK()
-		if err != nil {
-			return "", err
-		}
-		return jdkInfo.Path, nil
+		// pom.xml 是 Maven 项目核心文件，几乎必然存在且可读。读取失败多因 projectDir
+		// 路径错误或权限不足；此时降级到任意 JDK 会用错误版本编译，掩盖真正问题并
+		// 可能导致编译失败或运行时兼容性问题。与 Rust 版一致，直接报错（fail-fast）。
+		return "", fmt.Errorf("无法读取pom.xml %s: %w", pomPath, err)
 	}
 
 	pomContent := string(content)

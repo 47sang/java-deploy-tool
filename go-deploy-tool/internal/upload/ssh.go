@@ -27,8 +27,7 @@ const (
 
 // SSHClient SSH 客户端
 type SSHClient struct {
-	client  *ssh.Client
-	session *ssh.Session
+	client *ssh.Client
 }
 
 // NewSSHClient 创建 SSH 客户端
@@ -57,9 +56,6 @@ func NewSSHClient(server, username, password string) (*SSHClient, error) {
 
 // Close 关闭 SSH 连接
 func (c *SSHClient) Close() {
-	if c.session != nil {
-		c.session.Close()
-	}
 	if c.client != nil {
 		c.client.Close()
 	}
@@ -113,13 +109,13 @@ func (c *SSHClient) UploadFile(localPath, remotePath string, showProgress bool) 
 	// 读取本地文件
 	localFile, err := os.Open(localPath)
 	if err != nil {
-		return fmt.Errorf("打开本地文件失败: %v", err)
+		return fmt.Errorf("打开本地文件失败: %w", err)
 	}
 	defer localFile.Close()
 
 	fileInfo, err := localFile.Stat()
 	if err != nil {
-		return fmt.Errorf("获取文件信息失败: %v", err)
+		return fmt.Errorf("获取文件信息失败: %w", err)
 	}
 
 	fileSize := fileInfo.Size()
@@ -138,14 +134,16 @@ func (c *SSHClient) UploadFile(localPath, remotePath string, showProgress bool) 
 
 	// 确保远程目录存在
 	remoteDir := filepath.Dir(remotePath)
-	if err := sftpClient.MkdirAll(remoteDir); err != nil {
-		// 忽略目录已存在的错误
+	// 仅容忍"目录已存在"类错误；其余（权限不足、SFTP 连接异常等）必须向上传播，
+	// 否则后续创建/上传远程文件会静默失败。
+	if err := sftpClient.MkdirAll(remoteDir); err != nil && !errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("创建远程目录失败 %s: %w", remoteDir, err)
 	}
 
 	// 创建远程临时文件
 	remoteFile, err := sftpClient.Create(tempRemotePath)
 	if err != nil {
-		return fmt.Errorf("创建远程文件失败: %v", err)
+		return fmt.Errorf("创建远程文件失败: %w", err)
 	}
 	defer remoteFile.Close()
 
@@ -205,7 +203,7 @@ func (c *SSHClient) UploadFile(localPath, remotePath string, showProgress bool) 
 		// 删除旧备份并创建新备份
 		sftpClient.Remove(backupPath)
 		if err := sftpClient.Rename(remotePath, backupPath); err != nil {
-			return fmt.Errorf("备份远程文件失败: %v", err)
+			return fmt.Errorf("备份远程文件失败: %w", err)
 		}
 		fmt.Printf("已创建备份: %s\n", backupPath)
 	} else {
@@ -214,7 +212,7 @@ func (c *SSHClient) UploadFile(localPath, remotePath string, showProgress bool) 
 
 	// 将临时文件移动到最终位置
 	if err := sftpClient.Rename(tempRemotePath, remotePath); err != nil {
-		return fmt.Errorf("移动文件到最终位置失败: %v", err)
+		return fmt.Errorf("移动文件到最终位置失败: %w", err)
 	}
 
 	fmt.Printf("文件已移动到最终位置: %s\n", remotePath)
@@ -328,7 +326,7 @@ func (c *SSHClient) StartJar(jarPath, javaPath, env string) error {
 	checkCmd := fmt.Sprintf("ps -ef | grep %s | grep -v grep | awk '{print $2}'", jarPath)
 	output, err := c.ExecuteCommand(checkCmd)
 	if err != nil {
-		return fmt.Errorf("检查进程状态失败: %v", err)
+		return fmt.Errorf("检查进程状态失败: %w", err)
 	}
 
 	output = strings.TrimSpace(output)
@@ -348,7 +346,7 @@ func (c *SSHClient) UnzipRemote(zipPath, extractDir string) error {
 
 	output, err := c.ExecuteCommand(unzipCmd)
 	if err != nil {
-		return fmt.Errorf("解压失败: %v, 输出: %s", err, output)
+		return fmt.Errorf("解压失败: %w, 输出: %s", err, output)
 	}
 
 	return nil
@@ -359,7 +357,7 @@ func UploadAndRunJar(server, username, password, localPath, remotePath, javaPath
 	// 读取本地文件
 	fileInfo, err := os.Stat(localPath)
 	if err != nil {
-		return fmt.Errorf("无法获取本地文件信息: %v", err)
+		return fmt.Errorf("无法获取本地文件信息: %w", err)
 	}
 
 	fmt.Printf("读取本地文件: %s\n", localPath)
@@ -382,12 +380,12 @@ func UploadAndRunJar(server, username, password, localPath, remotePath, javaPath
 
 	// 在文件上传成功后杀死旧进程
 	if err := client.KillProcess(remotePath, env); err != nil {
-		return fmt.Errorf("杀死旧进程失败: %v", err)
+		return fmt.Errorf("杀死旧进程失败: %w", err)
 	}
 
 	// 启动 JAR 包
 	if err := client.StartJar(remotePath, javaPath, env); err != nil {
-		return fmt.Errorf("启动JAR包失败: %v", err)
+		return fmt.Errorf("启动JAR包失败: %w", err)
 	}
 
 	return nil
@@ -398,7 +396,7 @@ func UploadJarOnly(server, username, password, localPath, remotePath string) err
 	// 读取本地文件
 	fileInfo, err := os.Stat(localPath)
 	if err != nil {
-		return fmt.Errorf("无法获取本地文件信息: %v", err)
+		return fmt.Errorf("无法获取本地文件信息: %w", err)
 	}
 
 	fmt.Printf("读取本地文件: %s\n", localPath)
@@ -427,7 +425,7 @@ func UploadZipOnly(server, username, password, localPath, remotePath string) err
 	// 读取本地文件
 	fileInfo, err := os.Stat(localPath)
 	if err != nil {
-		return fmt.Errorf("无法获取本地文件信息: %v", err)
+		return fmt.Errorf("无法获取本地文件信息: %w", err)
 	}
 
 	// 创建 SSH 客户端
@@ -459,7 +457,7 @@ func UploadAndExtractZip(server, username, password, localPath, remotePath strin
 	// 读取本地文件
 	fileInfo, err := os.Stat(localPath)
 	if err != nil {
-		return fmt.Errorf("无法获取本地文件信息: %v", err)
+		return fmt.Errorf("无法获取本地文件信息: %w", err)
 	}
 
 	// 创建 SSH 客户端
@@ -517,13 +515,13 @@ func TestConnection(server, username, password string) error {
 
 	conn, err := net.DialTimeout("tcp", server, 10*time.Second)
 	if err != nil {
-		return fmt.Errorf("无法连接到服务器 %s: %v", server, err)
+		return fmt.Errorf("无法连接到服务器 %s: %w", server, err)
 	}
 	conn.Close()
 
 	client, err := ssh.Dial("tcp", server, config)
 	if err != nil {
-		return fmt.Errorf("SSH认证失败: %v", err)
+		return fmt.Errorf("SSH认证失败: %w", err)
 	}
 	client.Close()
 

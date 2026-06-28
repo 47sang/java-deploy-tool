@@ -57,12 +57,12 @@ func (c *DeployConfig) GetJarFilesList() []string {
 func FromFile(configPath, environment string) (*DeployConfig, error) {
 	content, err := os.ReadFile(configPath)
 	if err != nil {
-		return nil, fmt.Errorf("无法读取配置文件: %v", err)
+		return nil, fmt.Errorf("无法读取配置文件: %w", err)
 	}
 
 	var envs Environments
 	if _, err := toml.Decode(string(content), &envs); err != nil {
-		return nil, fmt.Errorf("解析配置文件失败: %v", err)
+		return nil, fmt.Errorf("解析配置文件失败: %w", err)
 	}
 
 	config, ok := envs.Environments[environment]
@@ -117,19 +117,19 @@ func CreateSpringBootConfig(path string) error {
 	dir := filepath.Dir(path)
 	if dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("创建配置目录失败: %v", err)
+			return fmt.Errorf("创建配置目录失败: %w", err)
 		}
 	}
 
 	file, err := os.Create(path)
 	if err != nil {
-		return fmt.Errorf("创建配置文件失败: %v", err)
+		return fmt.Errorf("创建配置文件失败: %w", err)
 	}
 	defer file.Close()
 
 	encoder := toml.NewEncoder(file)
 	if err := encoder.Encode(config); err != nil {
-		return fmt.Errorf("写入配置文件失败: %v", err)
+		return fmt.Errorf("写入配置文件失败: %w", err)
 	}
 
 	return nil

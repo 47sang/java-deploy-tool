@@ -10,6 +10,7 @@ import (
 	"deploy-tool/internal/compiler"
 	"deploy-tool/internal/config"
 	"deploy-tool/internal/upload"
+	"deploy-tool/pkg/utils"
 )
 
 // DeployJavaProject 部署 Java 项目。
@@ -72,7 +73,7 @@ func DeployJavaProject(ctx context.Context, projectDir, configPath string, envir
 				finalUploadOnly := uploadOnly || cfg.UploadOnly
 
 				if finalUploadOnly {
-					fmt.Printf("开始上传 %s 到 %s 环境\n", jarName, env)
+					utils.SafePrintf("开始上传 %s 到 %s 环境\n", jarName, env)
 					if err := upload.UploadJarOnly(
 						cfg.Server,
 						cfg.Username,
@@ -83,9 +84,9 @@ func DeployJavaProject(ctx context.Context, projectDir, configPath string, envir
 						errChan <- fmt.Errorf("上传失败 %s (%s环境): %v", jarName, env, err)
 						return
 					}
-					fmt.Printf("上传成功: %s (%s环境)\n", jarName, env)
+					utils.SafePrintf("上传成功: %s (%s环境)\n", jarName, env)
 				} else {
-					fmt.Printf("开始部署 %s 到 %s 环境\n", jarName, env)
+					utils.SafePrintf("开始部署 %s 到 %s 环境\n", jarName, env)
 					if err := upload.UploadAndRunJar(
 						cfg.Server,
 						cfg.Username,
@@ -98,7 +99,7 @@ func DeployJavaProject(ctx context.Context, projectDir, configPath string, envir
 						errChan <- fmt.Errorf("部署失败 %s (%s环境): %v", jarName, env, err)
 						return
 					}
-					fmt.Printf("部署成功: %s (%s环境)\n", jarName, env)
+					utils.SafePrintf("部署成功: %s (%s环境)\n", jarName, env)
 				}
 			}(jarName, jarPath, env, cfg)
 		}

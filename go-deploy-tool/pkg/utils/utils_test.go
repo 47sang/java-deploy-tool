@@ -1,6 +1,11 @@
 package utils
 
 import (
+	"io"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -67,6 +72,39 @@ func TestFormatExecutionTime(t *testing.T) {
 	for _, tt := range tests {
 		if got := FormatExecutionTime(tt.d); got != tt.want {
 			t.Errorf("FormatExecutionTime(%v) = %q, want %q", tt.d, got, tt.want)
+		}
+	}
+}
+
+// TestSafePrintf_Concurrent 并发 goroutine 各打印一行时，输出应恰好为 N 条完整行，
+// 不出现交错（行数 == goroutine 数即说明每条 SafePrintf 原子完成）。
+func TestSafePrintf_Concurrent(t *testing.T) {
+	// 该测试需串行捕获 os.Stdout，不能 t.Parallel
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	const n = 200
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			SafePrintf("line-%d\n", i)
+		}(i)
+	}
+	wg.Wait()
+	w.Close()
+	os.Stdout = old
+
+	out, _ := io.ReadAll(r)
+	if got := strings.Count(string(out), "\n"); got != n {
+		t.Errorf("并发输出应得到 %d 条完整行，实际 %d 行（存在交错）", n, got)
+	}
+	for i := 0; i < n; i++ {
+		if !strings.Contains(string(out), "line-"+strconv.Itoa(i)+"\n") {
+			t.Errorf("输出缺失完整行 line-%d", i)
+			break
 		}
 	}
 }

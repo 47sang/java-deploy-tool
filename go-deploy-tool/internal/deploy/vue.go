@@ -10,6 +10,7 @@ import (
 	"deploy-tool/internal/compiler"
 	"deploy-tool/internal/config"
 	"deploy-tool/internal/upload"
+	"deploy-tool/pkg/utils"
 )
 
 // DeployVueProject 部署 Vue 项目。
@@ -65,7 +66,7 @@ func DeployVueProject(ctx context.Context, projectDir, configPath string, enviro
 					errChan <- fmt.Errorf("上传失败 %s (%s环境): %v", cfg.OutputDir, env, err)
 					return
 				}
-				fmt.Printf("上传成功: %s (%s环境)\n", cfg.OutputDir, env)
+				utils.SafePrintf("上传成功: %s (%s环境)\n", cfg.OutputDir, env)
 			} else {
 				// 上传并解压
 				if err := upload.UploadAndExtractZip(
@@ -78,7 +79,7 @@ func DeployVueProject(ctx context.Context, projectDir, configPath string, enviro
 					errChan <- fmt.Errorf("上传失败 %s (%s环境): %v", cfg.OutputDir, env, err)
 					return
 				}
-				fmt.Printf("上传成功: %s (%s环境)\n", cfg.OutputDir, env)
+				utils.SafePrintf("上传成功: %s (%s环境)\n", cfg.OutputDir, env)
 			}
 		}(env, cfg)
 	}
